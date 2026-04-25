@@ -14,6 +14,10 @@ TARGET 		= ClassiCube-gc
 SOURCE_DIRS	= src src/gcwii third_party/bearssl
 # Directory where object files are placed
 BUILD_DIR	= build/gc
+PRELOAD_DIR = src/preload
+PRELOAD_ROOT = $(BUILD_DIR)/sdroot/ClassiCube
+DOLPHIN_SD_ROOT ?=
+DOLPHIN_PRELOAD_ROOT = $(DOLPHIN_SD_ROOT)/ClassiCube
 
 
 #---------------------------------------------------------------------------------
@@ -54,13 +58,23 @@ ELF2DOL := $(DEVKITPRO)/tools/bin/elf2dol
 #---------------------------------------------------------------------------------
 # Main targets
 #---------------------------------------------------------------------------------
-default: $(BUILD_DIR) $(TARGET).dol
+default: $(BUILD_DIR) $(TARGET).dol copy-preload
 
 clean:
 	rm $(TARGET).dol $(TARGET).elf $(OBJS)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+copy-preload:
+	if [ -d "$(PRELOAD_DIR)" ]; then \
+		mkdir -p "$(PRELOAD_ROOT)"; \
+		cp -r "$(PRELOAD_DIR)"/* "$(PRELOAD_ROOT)"/; \
+		if [ -n "$(DOLPHIN_SD_ROOT)" ]; then \
+			mkdir -p "$(DOLPHIN_PRELOAD_ROOT)"; \
+			cp -r "$(PRELOAD_DIR)"/* "$(DOLPHIN_PRELOAD_ROOT)"/; \
+		fi; \
+	fi
 
 
 #---------------------------------------------------------------------------------

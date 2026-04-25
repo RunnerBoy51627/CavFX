@@ -70,6 +70,8 @@ struct RayTracer;
 struct IGameComponent;
 extern struct IGameComponent Protocol_Component;
 
+/* Resets packet handlers/sizes for the currently selected game version. */
+void Protocol_Reset(void);
 void Protocol_Tick(void);
 
 extern cc_bool cpe_needD3Fix;

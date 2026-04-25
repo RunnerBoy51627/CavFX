@@ -16,6 +16,7 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 
 #define OPT_VIEW_DISTANCE "viewdist"
 #define OPT_BLOCK_PHYSICS "singleplayerphysics"
+#define OPT_SURVIVAL_MODE "survivalmode"
 #define OPT_NAMES_MODE "namesmode"
 #define OPT_INVERT_MOUSE "invertmouse"
 #define OPT_SENSITIVITY "mousesensitivity"

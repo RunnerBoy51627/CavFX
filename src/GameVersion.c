@@ -40,7 +40,7 @@ static const cc_uint8 v4_hotbar[INVENTORY_BLOCKS_PER_HOTBAR] = {
 };
 
 static const struct GameVersion version_cpe  = { 
-	"0.30",     true, VERSION_CPE, 
+	"CavFX Pre-Release 0.01 (Minecraft 0.30)",     true, VERSION_CPE, 
 	PROTOCOL_0030, BLOCK_MAX_CPE, 
 	10, sizeof(v7_inventory), NULL,         v7_hotbar,
 	"texpacks/default.zip"
@@ -74,9 +74,9 @@ void GameVersion_Load(void) {
 	cc_bool hasCPE = !Game_ClassicMode && Options_GetBool(OPT_CPE, true);
 	int version    = Options_GetInt(OPT_GAME_VERSION, VERSION_0017, VERSION_0030, VERSION_0030);
 	const struct GameVersion* ver = &version_cpe;
-
+	/*
 	if (hasCPE) {
-		/* defaults to CPE already */
+		// defaults to CPE already
 	} else if (version == VERSION_0030) {
 		ver = &version_0030;
 	} else if (version == VERSION_0023) {
@@ -86,6 +86,6 @@ void GameVersion_Load(void) {
 	} else if (version == VERSION_0017) {
 		ver = &version_0017;
 	}
-
+	*/
 	Game_Version = *ver;
 }

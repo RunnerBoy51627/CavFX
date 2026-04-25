@@ -395,7 +395,7 @@ const BindMapping PadBind_Defaults[BIND_COUNT] = {
 	{ CCPAD_UP,   0 },  { CCPAD_DOWN,  0 }, /* BIND_FORWARD, BIND_BACK */
 	{ CCPAD_LEFT, 0 },  { CCPAD_RIGHT, 0 }, /* BIND_LEFT, BIND_RIGHT */
 	{ CCPAD_1, 0 },     { 0, 0 },           /* BIND_JUMP, BIND_RESPAWN */
-	{ CCPAD_START, 0 }, { CCPAD_4,     0 }, /* BIND_SET_SPAWN, BIND_CHAT */
+	{ 0, 0 },           { CCPAD_4,     0 }, /* BIND_SET_SPAWN, BIND_CHAT */
 	{ CCPAD_3, 0     }, { 0, 0 },           /* BIND_INVENTORY, BIND_FOG */
 	{ CCPAD_START, 0 }, { 0, 0 },           /* BIND_SEND_CHAT, BIND_TABLIST */
 	{ CCPAD_2, CCPAD_L},{ CCPAD_2, CCPAD_3},/* BIND_SPEED, BIND_NOCLIP */ 
@@ -416,16 +416,16 @@ const BindMapping PadBind_Defaults[BIND_COUNT] = {
 
 const BindMapping KeyBind_Defaults[BIND_COUNT] = {
 	{ 'W', 0 }, { 'S', 0 }, { 'A', 0 }, { 'D', 0 }, /* BIND_FORWARD - BIND_RIGHT */
-	{ CCKEY_SPACE, 0 },  { 'R', 0 },                /* BIND_JUMP, BIND_RESPAWN */
-	{ CCKEY_ENTER, 0 },  { 'T', 0 },                /* BIND_SET_SPAWN, BIND_CHAT */
-	{ 'B', 0 },          { 'F', 0 },                /* BIND_INVENTORY, BIND_FOG */
+	{ CCKEY_SPACE, 0 },  { 0, 0 },                  /* BIND_JUMP, BIND_RESPAWN */
+	{ 0, 0 },           { 'T', 0 },                 /* BIND_SET_SPAWN, BIND_CHAT */
+	{ 'E', 0 },          { 'F', 0 },                /* BIND_INVENTORY, BIND_FOG */
 	{ CCKEY_ENTER, 0 },  { CCKEY_TAB, 0 },          /* BIND_SEND_CHAT, BIND_TABLIST */
-	{ CCKEY_LSHIFT, 0 }, { 'X', 0}, { 'Z', 0 },     /* BIND_SPEED, BIND_NOCLIP, BIND_FLY */ 
+	{ CCKEY_LCTRL, 0 },  { 'X', 0}, { 'Z', 0 },     /* BIND_SPEED, BIND_NOCLIP, BIND_FLY */ 
 	{ 'Q', 0 },          { 'E', 0 },                /* BIND_FLY_UP, BIND_FLY_DOWN */
 	{ CCKEY_LALT, 0 },   { CCKEY_F3, 0 },           /* BIND_EXT_INPUT, BIND_HIDE_FPS */
 	{ CCKEY_F12, 0 },    { CCKEY_F11, 0 },          /* BIND_SCREENSHOT, BIND_FULLSCREEN */
 	{ CCKEY_F5, 0 },     { CCKEY_F1, 0 },           /* BIND_THIRD_PERSON, BIND_HIDE_GUI */ 
-	{ CCKEY_F7, 0 }, { 'C', 0 }, { CCKEY_LCTRL, 0 },/* BIND_AXIS_LINES, BIND_ZOOM_SCROLL, BIND_HALF_SPEED */
+	{ CCKEY_F7, 0 }, { 'C', 0 }, { CCKEY_LSHIFT, 0 },/* BIND_AXIS_LINES, BIND_ZOOM_SCROLL, BIND_HALF_SPEED */
 	{ CCMOUSE_L, 0},{ CCMOUSE_M, 0},{ CCMOUSE_R, 0},/* BIND_DELETE_BLOCK, BIND_PICK_BLOCK, BIND_PLACE_BLOCK */
 	{ CCKEY_F6, 0 },     { CCKEY_LALT, 0 },         /* BIND_AUTOROTATE, BIND_HOTBAR_SWITCH */
 

@@ -14,6 +14,8 @@ TARGET 		= ClassiCube-wiiu
 SOURCE_DIRS	= src src/wiiu third_party/bearssl
 # Directory where object files are placed
 BUILD_DIR	= build/wiiu
+PRELOAD_DIR = src/preload
+PRELOAD_ROOT = $(BUILD_DIR)/sdroot/ClassiCube
 # Directory where shader files are
 SHADERS		= misc/wiiu
 
@@ -74,13 +76,16 @@ BIN2S	 := $(DEVKITPRO)/tools/bin/bin2s
 #---------------------------------------------------------------------------------
 # Main targets
 #---------------------------------------------------------------------------------
-default: $(BUILD_DIR) $(TARGET).wuhb
+default: $(BUILD_DIR) $(TARGET).wuhb copy-preload
 
 clean:
 	rm $(TARGET).wuhb $(TARGET).rpx $(TARGET).elf $(OBJS)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+copy-preload:
+	if [ -d "$(PRELOAD_DIR)" ]; then mkdir -p "$(PRELOAD_ROOT)" && cp -r "$(PRELOAD_DIR)"/* "$(PRELOAD_ROOT)"/ 2>/dev/null || true; fi
 
 
 #---------------------------------------------------------------------------------

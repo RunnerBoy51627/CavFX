@@ -14,6 +14,11 @@ TARGET 		= ClassiCube-wii
 SOURCE_DIRS	= src src/gcwii third_party/bearssl
 # Directory where object files are placed
 BUILD_DIR	= build/wii
+PRELOAD_DIR = src/preload
+PRELOAD_ROOT = $(BUILD_DIR)/sdroot/ClassiCube
+APP_ROOT = $(BUILD_DIR)/sdroot/apps/ClassiCube
+DOLPHIN_SD_ROOT ?=
+DOLPHIN_PRELOAD_ROOT = $(DOLPHIN_SD_ROOT)/ClassiCube
 
 
 #---------------------------------------------------------------------------------
@@ -53,13 +58,29 @@ ELF2DOL := $(DEVKITPRO)/tools/bin/elf2dol
 #---------------------------------------------------------------------------------
 # Main targets
 #---------------------------------------------------------------------------------
-default: $(BUILD_DIR) $(TARGET).dol
+default: $(BUILD_DIR) $(TARGET).dol package-sd
 
 clean:
 	rm $(TARGET).dol $(TARGET).elf $(OBJS)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+copy-preload:
+	if [ -d "$(PRELOAD_DIR)" ]; then \
+		mkdir -p "$(PRELOAD_ROOT)"; \
+		cp -r "$(PRELOAD_DIR)"/* "$(PRELOAD_ROOT)"/; \
+		if [ -n "$(DOLPHIN_SD_ROOT)" ]; then \
+			mkdir -p "$(DOLPHIN_PRELOAD_ROOT)"; \
+			cp -r "$(PRELOAD_DIR)"/* "$(DOLPHIN_PRELOAD_ROOT)"/; \
+		fi; \
+	fi
+
+package-sd: $(TARGET).dol copy-preload
+	mkdir -p "$(APP_ROOT)"
+	cp "$(TARGET).dol" "$(APP_ROOT)/boot.dol"
+	cp "misc/wii/meta.xml" "$(APP_ROOT)/meta.xml"
+	cp "misc/wii/icon.png" "$(APP_ROOT)/icon.png"
 
 
 #---------------------------------------------------------------------------------

@@ -24,10 +24,11 @@ extern struct IGameComponent Entities_Component;
 #define MAX_LOCAL_PLAYERS 1
 #endif
 #define MAX_NET_PLAYERS   255
+#define MAX_DROPPED_ITEMS 64
 
 /* Offset used to avoid floating point roundoff errors. */
 #define ENTITY_ADJUSTMENT 0.001f
-#define ENTITIES_MAX_COUNT (MAX_NET_PLAYERS + MAX_LOCAL_PLAYERS)
+#define ENTITIES_MAX_COUNT (MAX_NET_PLAYERS + MAX_LOCAL_PLAYERS + MAX_DROPPED_ITEMS)
 #define ENTITIES_SELF_ID 255
 
 enum NameMode {
@@ -190,6 +191,11 @@ void Entities_Remove(int id);
 /* Gets the ID of the closest entity to the given entity */
 /* Returns -1 if there is no other entity nearby */
 int Entities_GetClosest(struct Entity* src);
+/* Spawns a local dropped block item in survival mode. */
+cc_bool DroppedItem_Spawn(BlockID block);
+cc_bool DroppedItem_SpawnAt(BlockID block, Vec3 pos);
+cc_bool DroppedItem_SpawnAtVelocity(BlockID block, Vec3 pos, Vec3 vel);
+cc_bool DroppedItem_RemoveNearest(BlockID block, Vec3 pos);
 
 #define TABLIST_MAX_NAMES 256
 /* Data for all entries in tab list */
@@ -251,6 +257,9 @@ struct LocalPlayer {
 	struct CollisionsComp Collisions;
 	struct PhysicsComp Physics;
 	cc_bool _warnedRespawn, _warnedFly, _warnedNoclip, _warnedZoom;
+	int Health;
+	float SurvivalDamageCooldown, SurvivalLavaCooldown, Stamina;
+	cc_bool SprintHeld, Sprinting, SprintKeyDown, SprintExhausted, Sneaking;
 	cc_uint8 index;
 };
 

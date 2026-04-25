@@ -352,6 +352,7 @@ static cc_bool IntersectsOthers(Vec3 pos, BlockID block) {
 	
 	for (id = 0; id < ENTITIES_MAX_COUNT; id++)	
 	{
+		if (id >= MAX_NET_PLAYERS + MAX_LOCAL_PLAYERS) continue;
 		e = Entities.List[id];
 		if (!e || e == &Entities.CurPlayer->Base) continue;
 
@@ -402,8 +403,15 @@ static cc_bool CheckIsFree(BlockID block) {
 	return true;
 }
 
+static cc_bool InputHandler_SpawnDroppedItem(BlockID block, Vec3 pos, Vec3 vel) {
+	if (!DroppedItem_SpawnAtVelocity(block, pos, vel)) return false;
+	Server_SendDroppedItem(block, pos, vel);
+	return true;
+}
+
 static void InputHandler_DeleteBlock(void) {
 	IVec3 pos;
+	Vec3 dropPos, dropVel;
 	BlockID old;
 	/* always play delete animations, even if we aren't deleting a block */
 	HeldBlockRenderer_ClickAnim(true);
@@ -416,6 +424,11 @@ static void InputHandler_DeleteBlock(void) {
 
 	Game_ChangeBlock(pos.x, pos.y, pos.z, BLOCK_AIR);
 	Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, BLOCK_AIR);
+	if (Game_SurvivalMode) {
+		Vec3_Set(dropPos, pos.x + 0.5f, pos.y + 0.5f, pos.z + 0.5f);
+		Vec3_Set(dropVel, 0.0f, 0.12f, 0.0f);
+		if (!InputHandler_SpawnDroppedItem(old, dropPos, dropVel)) Chat_AddRaw("&cToo many dropped items");
+	}
 }
 
 static void InputHandler_PlaceBlock(void) {
@@ -438,6 +451,7 @@ static void InputHandler_PlaceBlock(void) {
 	if (!CheckIsFree(block)) return;
 
 	Game_ChangeBlock(pos.x, pos.y, pos.z, block);
+	if (Game_SurvivalMode) Inventory_ConsumeSelected();
 	Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, block);
 }
 
@@ -450,6 +464,7 @@ static void InputHandler_PickBlock(void) {
 	cur = World_GetBlock(pos.x, pos.y, pos.z);
 	if (Blocks.Draw[cur] == DRAW_GAS) return;
 	if (!(Blocks.CanPlace[cur] || Blocks.CanDelete[cur])) return;
+	if (Game_SurvivalMode && !Inventory_Contains(cur)) return;
 	Inventory_PickBlock(cur);
 }
 
@@ -564,7 +579,7 @@ static void InputHandler_Toggle(int key, cc_bool* target, const char* enableMsg,
 
 cc_bool InputHandler_SetFOV(int fov) {
 	struct HacksComp* h = &Entities.CurPlayer->Hacks;
-	if (!h->Enabled || !h->CanUseThirdPerson) return false;
+	if ((!h->Enabled && !Game_SurvivalMode) || !h->CanUseThirdPerson) return false;
 
 	Camera.ZoomFov = fov;
 	Camera_SetFov(fov);
@@ -580,7 +595,7 @@ cc_bool Input_HandleMouseWheel(float delta) {
 	if (!Bind_IsTriggered[BIND_ZOOM_SCROLL]) return false;
 
 	h = &Entities.CurPlayer->Hacks;
-	if (!h->Enabled || !h->CanUseThirdPerson) return false;
+	if ((!h->Enabled && !Game_SurvivalMode) || !h->CanUseThirdPerson) return false;
 
 	if (input_fovIndex == -1.0f) input_fovIndex = (float)Camera.ZoomFov;
 	input_fovIndex -= delta * 5.0f;
@@ -591,7 +606,7 @@ cc_bool Input_HandleMouseWheel(float delta) {
 
 static void InputHandler_CheckZoomFov(void* obj) {
 	struct HacksComp* h = &Entities.CurPlayer->Hacks;
-	if (!h->Enabled || !h->CanUseThirdPerson) Camera_SetFov(Camera.DefaultFov);
+	if ((!h->Enabled && !Game_SurvivalMode) || !h->CanUseThirdPerson) Camera_SetFov(Camera.DefaultFov);
 }
 
 
@@ -696,9 +711,26 @@ static cc_bool BindTriggered_ThirdPerson(int key, struct InputDevice* device) {
 }
 
 static cc_bool BindTriggered_DropBlock(int key, struct InputDevice* device) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	Vec3 pos, vel, dir;
 	if (Gui.InputGrab) return false;
 	
 	if (Inventory_CheckChangeSelected() && Inventory_SelectedBlock != BLOCK_AIR) {
+		if (Game_SurvivalMode) {
+			dir = Vec3_GetDirVector(p->Base.Yaw * MATH_DEG2RAD, p->Base.Pitch * MATH_DEG2RAD);
+			pos = Entity_GetEyePosition(&p->Base);
+			pos.x += dir.x * 0.6f;
+			pos.y += dir.y * 0.6f - 0.25f;
+			pos.z += dir.z * 0.6f;
+			Vec3_Set(vel, dir.x * 0.22f, dir.y * 0.22f + 0.12f, dir.z * 0.22f);
+
+			if (!InputHandler_SpawnDroppedItem(Inventory_SelectedBlock, pos, vel)) {
+				Chat_AddRaw("&cToo many dropped items");
+				return true;
+			}
+			Inventory_ConsumeSelected();
+			return true;
+		}
 		/* Don't assign SelectedIndex directly, because we don't want held block
 		switching positions if they already have air in their inventory hotbar. */
 		Inventory_Set(Inventory.SelectedIndex, BLOCK_AIR);
@@ -934,6 +966,7 @@ static void OnInputUp(void* obj, int key, cc_bool was, struct InputDevice* devic
 }
 
 static int moveFlags[MAX_LOCAL_PLAYERS];
+static double lastForwardTap[MAX_LOCAL_PLAYERS];
 
 static cc_bool Player_TriggerLeft(int key,  struct InputDevice* device) {
 	moveFlags[device->mappedIndex] |= FACE_BIT_XMIN;
@@ -944,6 +977,13 @@ static cc_bool Player_TriggerRight(int key, struct InputDevice* device) {
 	return Gui.InputGrab == NULL;
 }
 static cc_bool Player_TriggerUp(int key,    struct InputDevice* device) {
+	struct LocalPlayer* p = &LocalPlayer_Instances[device->mappedIndex];
+	if (Game_SurvivalMode && Gui.InputGrab == NULL && !(moveFlags[device->mappedIndex] & FACE_BIT_YMIN)) {
+		if (Game.Time - lastForwardTap[device->mappedIndex] <= 0.30) {
+			p->SprintHeld = true;
+		}
+		lastForwardTap[device->mappedIndex] = Game.Time;
+	}
 	moveFlags[device->mappedIndex] |= FACE_BIT_YMIN;
 	return Gui.InputGrab == NULL;
 }
@@ -959,7 +999,9 @@ static void Player_ReleaseRight(int key, struct InputDevice* device) {
 	moveFlags[device->mappedIndex] &= ~FACE_BIT_XMAX;
 }
 static void Player_ReleaseUp(int key,    struct InputDevice* device) {
+	struct LocalPlayer* p = &LocalPlayer_Instances[device->mappedIndex];
 	moveFlags[device->mappedIndex] &= ~FACE_BIT_YMIN;
+	if (Game_SurvivalMode && !p->SprintKeyDown) p->SprintHeld = false;
 }
 static void Player_ReleaseDown(int key,  struct InputDevice* device) {
 	moveFlags[device->mappedIndex] &= ~FACE_BIT_YMAX;

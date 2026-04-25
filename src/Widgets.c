@@ -479,12 +479,30 @@ static void HotbarWidget_RenderEntries(struct HotbarWidget* w, int offset) {
 	IsometricDrawer_Render(w->verticesCount, offset, w->state);
 }
 
+static void HotbarWidget_RenderCounts(struct HotbarWidget* w) {
+	struct Texture* tex;
+	int i, x;
+	if (!Game_SurvivalMode) return;
+
+	for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
+		if (Inventory_GetCount(i) <= 1) continue;
+		tex = &w->countTex[i];
+		if (!tex->ID) continue;
+
+		x = HotbarWidget_TileX(w, i);
+		tex->x = (int)(x + w->slotWidth / 2 - tex->width - 2 * DisplayInfo.ScaleX);
+		tex->y = (int)(w->y + w->height - tex->height - 2 * DisplayInfo.ScaleY);
+		Texture_Render(tex);
+	}
+}
+
 static int HotbarWidget_Render2(void* widget, int offset) {
 	struct HotbarWidget* w = (struct HotbarWidget*)widget;
 	Gfx_3DS_SetRenderScreen(BOTTOM_SCREEN);
 
 	HotbarWidget_RenderOutline(w, offset    );
 	HotbarWidget_RenderEntries(w, offset + 8);
+	HotbarWidget_RenderCounts(w);
 
 	if (Gui_TouchUI) {
 		w->ellipsisTex.x = HotbarWidget_TileX(w, HOTBAR_MAX_INDEX) - w->ellipsisTex.width / 2;
@@ -498,8 +516,27 @@ static int HotbarWidget_Render2(void* widget, int offset) {
 
 static int HotbarWidget_MaxVertices(void* w) { return HOTBAR_MAX_VERTICES; }
 
+static void HotbarWidget_UpdateCountTex(struct HotbarWidget* w, int i, int count) {
+	cc_string str; char strBuffer[STRING_SIZE];
+	struct DrawTextArgs args;
+
+	w->countTexValue[i] = count;
+	Gfx_DeleteTexture(&w->countTex[i].ID);
+	if (!Game_SurvivalMode || count <= 1 || !w->countFont) return;
+
+	String_InitArray(str, strBuffer);
+	String_Format1(&str, "%i", &count);
+	DrawTextArgs_Make(&args, &str, w->countFont, true);
+	Drawer2D_MakeTextTexture(&w->countTex[i], &args);
+}
+
 void HotbarWidget_Update(struct HotbarWidget* w, float delta) {
 	int i;
+	for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
+		if (w->countTexValue[i] != Inventory_GetCount(i)) {
+			HotbarWidget_UpdateCountTex(w, i, Inventory_GetCount(i));
+		}
+	}
 	if (!Gui_TouchUI) return;
 
 	for (i = 0; i < HOTBAR_MAX_INDEX; i++) 
@@ -683,8 +720,12 @@ static int HotbarWidget_MouseScroll(void* widget, float delta) {
 
 static void HotbarWidget_Free(void* widget) {
 	struct HotbarWidget* w = (struct HotbarWidget*)widget;
-	if (!Gui_TouchUI) return;
+	int i;
 
+	for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
+		Gfx_DeleteTexture(&w->countTex[i].ID);
+	}
+	if (!Gui_TouchUI) return;
 	Gfx_DeleteTexture(&w->ellipsisTex.ID);
 }
 
@@ -699,8 +740,18 @@ void HotbarWidget_Create(struct HotbarWidget* w) {
 	w->VTABLE    = &HotbarWidget_VTABLE;
 	w->horAnchor = ANCHOR_CENTRE;
 	w->verAnchor = ANCHOR_MAX;
+#ifdef CC_BUILD_GAMECUBE && CC_BUILD_WII
+	w->yOffset = -Display_ScaleY(-25);
+	#else
+#endif
 	w->scale     = 1;
 	w->verticesCount = 0;
+	{
+		int i;
+		for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
+			w->countTexValue[i] = -1;
+		}
+	}
 
 #ifdef CC_BUILD_TOUCH
 	{
@@ -715,6 +766,11 @@ void HotbarWidget_Create(struct HotbarWidget* w) {
 void HotbarWidget_SetFont(struct HotbarWidget* w, struct FontDesc* font) {
 	static const cc_string dots = String_FromConst("...");
 	struct DrawTextArgs args;
+	int i;
+	w->countFont = font;
+	for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
+		HotbarWidget_UpdateCountTex(w, i, Inventory_GetCount(i));
+	}
 	if (!Gui_TouchUI) return;
 
 	DrawTextArgs_Make(&args, &dots, font, true);
@@ -753,16 +809,21 @@ static void TableWidget_MoveCursorToSelected(struct TableWidget* w) {
 
 static void TableWidget_RecreateTitle_Internal(struct TableWidget* w, cc_bool force, int titleBlock) {
 	BlockID block;
+	int count = 0;
 	if (!force && w->selectedIndex == w->lastCreatedIndex) return;
 	if (w->blocksCount == 0) return;
 	w->lastCreatedIndex = w->selectedIndex;
 
 	if (titleBlock < 0) {
 		block = w->selectedIndex == -1 ? BLOCK_AIR : w->blocks[w->selectedIndex];
+		if (Game_SurvivalMode && w->selectedIndex != -1) {
+			count = Inventory.Counts[w->blockRawSlots[w->selectedIndex]];
+		}
 	} else {
 		block = (BlockID)titleBlock;
+		if (Game_SurvivalMode) count = Inventory_Count(block);
 	}
-	w->UpdateTitle(block);
+	w->UpdateTitle(block, count);
 }
 void TableWidget_RecreateTitle(struct TableWidget* w, cc_bool force) {
 	TableWidget_RecreateTitle_Internal(w, force, -1);
@@ -771,12 +832,37 @@ void TableWidget_RecreateTitleForBlock(struct TableWidget* w, cc_bool force, int
 	TableWidget_RecreateTitle_Internal(w, force, titleBlock);
 }
 
+CC_NOINLINE int TableWidget_IndexAt(struct TableWidget* w, int x, int y) {
+	int i, cellX, cellY, maxHeight;
+
+	maxHeight = w->cellSizeY * w->rowsVisible;
+	if (!Gui_Contains(w->x, w->y + 3, w->width, maxHeight - 3 * 2, x, y)) return -1;
+
+	for (i = 0; i < w->blocksCount; i++) {
+		TableWidget_GetCoords(w, i, &cellX, &cellY);
+		if (Gui_Contains(cellX, cellY, w->cellSizeX, w->cellSizeY, x, y)) return i;
+	}
+	return -1;
+}
+
 void TableWidget_RecreateBlocks(struct TableWidget* w) {
 	int max = Game_UseCPEBlocks ? BLOCK_MAX_DEFINED : BLOCK_MAX_ORIGINAL;
 	int i, begCount, rowEnd;
 	cc_bool emptyRow;
 	BlockID block;
 	w->blocksCount = 0;
+
+	if (Game_SurvivalMode) {
+		for (i = 0; i < INVENTORY_SURVIVAL_SLOTS; i++) {
+			block = Inventory.Table[i];
+			if (block > max) block = BLOCK_AIR;
+			w->blockRawSlots[w->blocksCount] = i;
+			w->blocks[w->blocksCount++] = block;
+		}
+		w->rowsTotal = Math_CeilDiv(w->blocksCount, w->blocksPerRow);
+		Widget_Layout(w);
+		return;
+	}
 
 	for (i = 0; i < Array_Elems(Inventory.Map);) {
 		emptyRow = true;
@@ -787,6 +873,7 @@ void TableWidget_RecreateBlocks(struct TableWidget* w) {
 			block = Inventory.Map[i];
 			if (block > max) continue;
 			
+			w->blockRawSlots[w->blocksCount] = -1;
 			w->blocks[w->blocksCount++] = block;
 			if (block != BLOCK_AIR) emptyRow = false;
 		}
@@ -796,6 +883,94 @@ void TableWidget_RecreateBlocks(struct TableWidget* w) {
 
 	w->rowsTotal = Math_CeilDiv(w->blocksCount, w->blocksPerRow);
 	Widget_Layout(w);
+}
+
+static struct FontDesc* TableWidget_CountFont(struct TableWidget* w) {
+	static struct FontDesc font;
+	static int fontSize;
+	int size;
+
+	size = Display_ScaleY(12);
+	if (fontSize == size) return &font;
+
+	if (fontSize) Font_Free(&font);
+	Font_Make(&font, size, FONT_FLAGS_PADDING);
+	fontSize = size;
+	return &font;
+}
+
+static void TableWidget_UpdateCountTex(struct TableWidget* w, int raw, int count) {
+	cc_string str; char strBuffer[STRING_SIZE];
+	struct DrawTextArgs args;
+	struct FontDesc* font;
+
+	w->countTexValue[raw] = count;
+	Gfx_DeleteTexture(&w->countTex[raw].ID);
+	if (!Game_SurvivalMode || count <= 1) return;
+
+	String_InitArray(str, strBuffer);
+	String_Format1(&str, "%i", &count);
+	font = TableWidget_CountFont(w);
+	DrawTextArgs_Make(&args, &str, font, true);
+	Drawer2D_MakeTextTexture(&w->countTex[raw], &args);
+}
+
+static void TableWidget_UpdateCounts(struct TableWidget* w) {
+	int i;
+	if (!Game_SurvivalMode) return;
+
+	for (i = 0; i < INVENTORY_SURVIVAL_SLOTS; i++) {
+		if (w->countTexValue[i] == Inventory.Counts[i]) continue;
+		TableWidget_UpdateCountTex(w, i, Inventory.Counts[i]);
+	}
+}
+
+static cc_uint8 TableWidget_DigitMask(int digit, int row) {
+	static const cc_uint8 masks[10][5] = {
+		{ 7, 5, 5, 5, 7 }, { 2, 6, 2, 2, 7 },
+		{ 7, 1, 7, 4, 7 }, { 7, 1, 7, 1, 7 },
+		{ 5, 5, 7, 1, 1 }, { 7, 4, 7, 1, 7 },
+		{ 7, 4, 7, 5, 7 }, { 7, 1, 1, 1, 1 },
+		{ 7, 5, 7, 5, 7 }, { 7, 5, 7, 1, 7 }
+	};
+	return masks[digit][row];
+}
+
+static void TableWidget_DrawCountDigit(int x, int y, int scale, int digit, PackedCol color) {
+	int row, col;
+	cc_uint8 mask;
+
+	for (row = 0; row < 5; row++) {
+		mask = TableWidget_DigitMask(digit, row);
+		for (col = 0; col < 3; col++) {
+			if (!(mask & (1 << (2 - col)))) continue;
+			Gfx_Draw2DFlat(x + col * scale, y + row * scale, scale, scale, color);
+		}
+	}
+}
+
+static void TableWidget_DrawCount(int slotX, int slotY, int count) {
+	int scale = Display_ScaleX(3);
+	int gap, width, x, y;
+	PackedCol white = PackedCol_Make(255, 255, 255, 255);
+	PackedCol shadow = PackedCol_Make(0, 0, 0, 255);
+
+	if (scale < 1) scale = 1;
+	gap   = scale;
+	width = count >= 10 ? 7 * scale : 3 * scale;
+	x     = slotX + 2 * scale;
+	y     = slotY + 2 * scale;
+
+	Gfx_Draw2DFlat(x - scale, y - scale, width + 2 * scale, 7 * scale, PackedCol_Make(0, 0, 0, 140));
+	if (count >= 10) {
+		TableWidget_DrawCountDigit(x + scale, y + scale, scale, (count / 10) % 10, shadow);
+		TableWidget_DrawCountDigit(x + 4 * scale + gap, y + scale, scale, count % 10, shadow);
+		TableWidget_DrawCountDigit(x, y, scale, (count / 10) % 10, white);
+		TableWidget_DrawCountDigit(x + 3 * scale + gap, y, scale, count % 10, white);
+	} else {
+		TableWidget_DrawCountDigit(x + scale, y + scale, scale, count, shadow);
+		TableWidget_DrawCountDigit(x, y, scale, count, white);
+	}
 }
 
 static void TableWidget_BuildMesh(void* widget, struct VertexTextured** vertices) {
@@ -810,16 +985,16 @@ static void TableWidget_BuildMesh(void* widget, struct VertexTextured** vertices
 	IsometricDrawer_BeginBatch(data, w->state);
 	for (i = 0; i < w->blocksCount; i++) {
 		if (!TableWidget_GetCoords(w, i, &x, &y)) continue;
+		if (w->blocks[i] == BLOCK_AIR) continue;
 
-		/* We want to always draw the selected block on top of others */
-		/* TODO: Need two size arguments, in case X/Y dpi differs */
-		if (i == w->selectedIndex) continue;
+		/* Creative inventory redraws selected block larger/on top; survival keeps a stable grid. */
+		if (!Game_SurvivalMode && i == w->selectedIndex) continue;
 		IsometricDrawer_AddBatch(w->blocks[i],
 			w->normBlockSize, x + cellSizeX / 2, y + cellSizeY / 2);
 	}
 
 	i = w->selectedIndex;
-	if (i != -1) {
+	if (!Game_SurvivalMode && i != -1 && w->blocks[i] != BLOCK_AIR) {
 		TableWidget_GetCoords(w, i, &x, &y);
 
 		IsometricDrawer_AddBatch(w->blocks[i],
@@ -834,7 +1009,7 @@ static int TableWidget_Render2(void* widget, int offset) {
 	struct TableWidget* w = (struct TableWidget*)widget;
 	int cellSizeX, cellSizeY, size;
 	float off;
-	int x, y;
+	int i, x, y, raw;
 
 	/* These were sourced by taking a screenshot of vanilla */
 	/* Then using paint to extract the color components */
@@ -843,6 +1018,8 @@ static int TableWidget_Render2(void* widget, int offset) {
 	PackedCol bottomBackColor = PackedCol_Make( 57,  57, 104, 202);
 	PackedCol topSelColor     = PackedCol_Make(255, 255, 255, 142);
 	PackedCol bottomSelColor  = PackedCol_Make(255, 255, 255, 192);
+	PackedCol survivalSlot    = PackedCol_Make( 18,  18,  18, 150);
+	PackedCol survivalSel     = PackedCol_Make(235, 235, 235, 180);
 
 	Gfx_Draw2DGradient(Table_X(w), Table_Y(w),
 		Table_Width(w), Table_Height(w), topBackColor, bottomBackColor);
@@ -853,6 +1030,12 @@ static int TableWidget_Render2(void* widget, int offset) {
 
 	cellSizeX = w->cellSizeX;
 	cellSizeY = w->cellSizeY;
+	if (Game_SurvivalMode) {
+		for (i = 0; i < w->blocksCount; i++) {
+			if (!TableWidget_GetCoords(w, i, &x, &y)) continue;
+			Gfx_Draw2DFlat(x + 2, y + 2, cellSizeX - 4, cellSizeY - 4, i == w->selectedIndex ? survivalSel : survivalSlot);
+		}
+	}
 	if (w->selectedIndex != -1 && Gui.ClassicInventory && w->blocks[w->selectedIndex] != BLOCK_AIR) {
 		TableWidget_GetCoords(w, w->selectedIndex, &x, &y);
 
@@ -869,12 +1052,29 @@ static int TableWidget_Render2(void* widget, int offset) {
 	if (w->verticesCount) {
 		IsometricDrawer_Render(w->verticesCount, offset, w->state);
 	}
+
+	if (Game_SurvivalMode) {
+		for (i = 0; i < w->blocksCount; i++) {
+			raw = w->blockRawSlots[i];
+			if (raw < 0 || raw >= INVENTORY_SURVIVAL_SLOTS) continue;
+			if (Inventory.Counts[raw] <= 1) continue;
+			if (!TableWidget_GetCoords(w, i, &x, &y)) continue;
+			TableWidget_DrawCount(x, y, Inventory.Counts[raw]);
+		}
+	}
 	return offset + TABLE_MAX_VERTICES;
 }
 
 static int TableWidget_MaxVertices(void* w) { return TABLE_MAX_VERTICES; }
 
-static void TableWidget_Free(void* widget) { }
+static void TableWidget_Free(void* widget) {
+	struct TableWidget* w = (struct TableWidget*)widget;
+	int i;
+	for (i = 0; i < INVENTORY_SURVIVAL_SLOTS; i++) {
+		Gfx_DeleteTexture(&w->countTex[i].ID);
+		w->countTexValue[i] = -1;
+	}
+}
 
 static void TableWidget_Reposition(void* widget) {
 	struct TableWidget* w = (struct TableWidget*)widget;
@@ -931,8 +1131,13 @@ static int TableWidget_PointerDown(void* widget, int id, int x, int y) {
 	if (Elem_HandlesPointerDown(&w->scroll, id, x, y)) {
 		return TOUCH_TYPE_GUI;
 	} else if (w->selectedIndex != -1 && w->blocks[w->selectedIndex] != BLOCK_AIR) {
-		Inventory_SetSelectedBlock(w->blocks[w->selectedIndex]);
-		w->pendingClose = true;
+		if (Game_SurvivalMode) {
+			Inventory_PickBlock(w->blocks[w->selectedIndex]);
+			w->pendingClose = false;
+		} else {
+			Inventory_SetSelectedBlock(w->blocks[w->selectedIndex]);
+			w->pendingClose = true;
+		}
 		return TOUCH_TYPE_GUI;
 	} else if (Gui_Contains(Table_X(w), Table_Y(w), Table_Width(w), Table_Height(w), x, y)) {
 		return TOUCH_TYPE_GUI;
@@ -1049,6 +1254,12 @@ void TableWidget_Add(void* screen, struct TableWidget* w, int sbWidth) {
 	if (!w->everCreated) {
 		w->everCreated   = true;
 		w->selectedIndex = -1;
+	}
+	{
+		int i;
+		for (i = 0; i < INVENTORY_SURVIVAL_SLOTS; i++) {
+			w->countTexValue[i] = -1;
+		}
 	}
 	AddWidget(screen, w);
 

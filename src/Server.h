@@ -1,6 +1,7 @@
 #ifndef CC_SERVERCONNECTION_H
 #define CC_SERVERCONNECTION_H
 #include "Core.h"
+#include "Vectors.h"
 CC_BEGIN_HEADER
 
 /* 
@@ -73,6 +74,18 @@ CC_VAR extern struct _ServerConnectionData {
 /* If user hasn't previously accepted url, displays a dialog asking to confirm downloading it */
 /* Otherwise just calls TexturePack_Extract */
 void Server_RetrieveTexturePack(const cc_string* url);
+/* Switches from the current connection mode and begins connecting to a multiplayer server. */
+void Server_ConnectTo(const cc_string* address, int port);
+/* Opens the current singleplayer world to direct LAN clients. */
+cc_bool Server_StartLAN(int port);
+/* Closes the current LAN host, if one is running. */
+void Server_StopLAN(void);
+/* Whether the current singleplayer world is listening for LAN clients. */
+cc_bool Server_IsLANHosted(void);
+/* Broadcasts a locally spawned dropped item to CavLAN peers, if connected. */
+void Server_SendDroppedItem(BlockID block, Vec3 pos, Vec3 vel);
+/* Broadcasts a locally picked up dropped item to CavLAN peers, if connected. */
+void Server_SendPickedItem(BlockID block, Vec3 pos);
 
 /* Path of map to automatically load in singleplayer */
 extern cc_string SP_AutoloadMap;

@@ -383,6 +383,12 @@ cc_bool SockAddr_ToString(const cc_sockaddr* addr, cc_string* dst);
 
 /* Allocates a new socket that is capable of connecting to the given address */
 cc_result Socket_Create(cc_socket* s, cc_sockaddr* addr);
+#ifdef CC_BUILD_WIN
+/* Creates a non-connected TCP socket listening on the given port. */
+cc_result Socket_CreateListener(cc_socket* s, int port);
+/* Accepts a pending client from a listening socket. */
+cc_result Socket_Accept(cc_socket s, cc_socket* client);
+#endif
 /* Attempts to set whether socket operations block calling thread or not */
 cc_result Socket_SetNonBlocking(cc_socket s, cc_bool nonblocking);
 /* Attempts to close the given socket */

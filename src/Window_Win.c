@@ -54,7 +54,7 @@
 
 /* https://docs.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-setpixelformat */
 #define CC_WIN_STYLE WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN
-#define CC_WIN_CLASSNAME TEXT("ClassiCube_Window")
+#define CC_WIN_CLASSNAME TEXT("CavFX_Window")
 #define Rect_Width(rect)  (rect.right  - rect.left)
 #define Rect_Height(rect) (rect.bottom - rect.top)
 

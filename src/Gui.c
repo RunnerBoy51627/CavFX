@@ -52,7 +52,11 @@ float Gui_Scale(float value) {
 }
 
 float Gui_GetHotbarScale(void) {
+#ifdef CC_BUILD_WII && CC_BUILD_GAMECUBE
 	return Gui_Scale(GetWindowScale() * Gui.RawHotbarScale);
+#else
+	return Gui_Scale(GetWindowScale() * Gui.RawHotbarScale * 1.3f);
+#endif
 }
 
 float Gui_GetInventoryScale(void) {
@@ -120,7 +124,7 @@ static void LoadOptions(void) {
 
 	Gui.ClassicTexture   = Options_GetBool(OPT_CLASSIC_GUI,        true) || Game_ClassicMode;
 	Gui.ClassicTabList   = Options_GetBool(OPT_CLASSIC_TABLIST,   false) || Game_ClassicMode;
-	Gui.ClassicMenu      = Options_GetBool(OPT_CLASSIC_OPTIONS,   false) || Game_ClassicMode;
+	Gui.ClassicMenu      = Options_GetBool(OPT_CLASSIC_OPTIONS,   false) || Game_ClassicMode || Game_ClassicHacks;
 	Gui.ClassicChat      = Options_GetBool(OPT_CLASSIC_CHAT,      false) || Game_PureClassic;
 	Gui.ClassicInventory = Options_GetBool(OPT_CLASSIC_INVENTORY, false) || Game_ClassicMode;
 	Gui.ShowFPS          = Options_GetBool(OPT_SHOW_FPS, true);

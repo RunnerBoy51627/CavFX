@@ -16,6 +16,8 @@ TARGET 			= ClassiCube-vita
 SOURCE_DIRS		= src src/psvita third_party/bearssl
 # Directory where object files are placed
 BUILD_DIR		= build/vita
+PRELOAD_DIR		= src/preload
+PRELOAD_ROOT	= $(BUILD_DIR)/ux0/data/ClassiCube
 
 SFO_TITLE 	= ClassiCube
 SFO_TITLEID = CUBE00200
@@ -59,10 +61,13 @@ ELF_CREATE	:= $(VITASDK)/bin/vita-elf-create
 #---------------------------------------------------------------------------------
 # main targets
 #---------------------------------------------------------------------------------
-default: $(BUILD_DIR) $(TARGET).vpk
+default: $(BUILD_DIR) $(TARGET).vpk copy-preload
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+copy-preload:
+	if [ -d "$(PRELOAD_DIR)" ]; then mkdir -p "$(PRELOAD_ROOT)" && cp -r "$(PRELOAD_DIR)"/* "$(PRELOAD_ROOT)"/ 2>/dev/null || true; fi
 
 clean:
 	rm $(TARGET).velf $(TARGET).elf $(TARGET).vpk param.sfo eboot.bin $(OBJS)

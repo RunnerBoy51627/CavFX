@@ -177,8 +177,11 @@ cc_string args[GAME_MAX_CMDARGS];
 	//argsCount = String_UNSAFE_Split(&rawArgs, ' ', args, 4);
 #endif
 
-	if (argsCount == 0)
-		return ARG_RESULT_RUN_LAUNCHER;
+	if (argsCount == 0) {
+		Options_Get(LOPT_USERNAME, &Game_Username, DEFAULT_USERNAME);
+		Game_ShowMainMenu = true;
+		return ARG_RESULT_RUN_GAME;
+	}
 
 #ifndef CC_BUILD_WEB
 	/* :[hash] - auto join server with the given hash */
@@ -245,7 +248,9 @@ static int RunProgram(int argc, char** argv) {
 	switch (ProcessProgramArgs(argc, argv))
 	{
 	case ARG_RESULT_RUN_LAUNCHER:
-		RunLauncher();
+		Options_Get(LOPT_USERNAME, &Game_Username, DEFAULT_USERNAME);
+		Game_ShowMainMenu = true;
+		RunGame();
 		return 0;
 	case ARG_RESULT_RUN_GAME:
 		RunGame();

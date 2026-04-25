@@ -15,6 +15,7 @@
 #include "Input.h"
 #include "InputHandler.h"
 #include "Gui.h"
+#include "Inventory.h"
 #include "Stream.h"
 #include "Bitmap.h"
 #include "Logger.h"
@@ -23,6 +24,7 @@
 #include "Utils.h"
 #include "EntityRenderers.h"
 #include "Protocol.h"
+#include "Server.h"
 
 const char* const NameMode_Names[NAME_MODE_COUNT]   = { "None", "Hovered", "All", "AllHovered", "AllUnscaled" };
 const char* const ShadowMode_Names[SHADOW_MODE_COUNT] = { "None", "SnapToBlock", "Circle", "CircleAll" };
@@ -497,6 +499,184 @@ void Entity_LerpAngles(struct Entity* e, float t) {
 *#########################################################################################################################*/
 struct _EntitiesData Entities;
 
+#define DROPPED_ITEMS_FIRST (MAX_NET_PLAYERS + MAX_LOCAL_PLAYERS)
+#define DROPPED_ITEM_PICKUP_DELAY 0.5f
+#define DROPPED_ITEM_LIFETIME 300.0f
+#define DROPPED_ITEM_PICKUP_RADIUS 1.25f
+
+struct DroppedItem {
+	struct Entity Base;
+	struct CollisionsComp Collisions;
+	BlockID Block;
+	float Age;
+	int EntityID;
+};
+static struct DroppedItem DroppedItems[MAX_DROPPED_ITEMS];
+
+static void DroppedItem_Despawn(struct Entity* e) {
+	DeleteSkin(e);
+	EntityNames_Delete(e);
+
+	if (e->Flags & ENTITY_FLAG_HAS_MODELVB)
+		Gfx_DeleteDynamicVb(&e->ModelVB);
+}
+
+static void DroppedItem_TryPickup(struct DroppedItem* item) {
+	struct Entity* e = &item->Base;
+	struct Entity* p = &Entities.CurPlayer->Base;
+	Vec3 delta;
+	float radius;
+
+	if (item->Age < DROPPED_ITEM_PICKUP_DELAY) return;
+	Vec3_Sub(&delta, &e->Position, &p->Position);
+	radius = DROPPED_ITEM_PICKUP_RADIUS;
+	if (Vec3_LengthSquared(&delta) > radius * radius) return;
+	if (!Inventory_TryAdd(item->Block)) return;
+
+	Server_SendPickedItem(item->Block, e->Position);
+	Entities_Remove(item->EntityID);
+}
+
+static void DroppedItem_Tick(struct Entity* e, float delta) {
+	struct DroppedItem* item = (struct DroppedItem*)e;
+	item->Age += delta;
+	if (!World.Loaded || item->Age >= DROPPED_ITEM_LIFETIME) {
+		Entities_Remove(item->EntityID);
+		return;
+	}
+
+	e->Velocity.y -= 0.04f;
+	if (e->Velocity.y < -0.5f) e->Velocity.y = -0.5f;
+	Collisions_MoveAndWallSlide(&item->Collisions);
+	Vec3_AddBy(&e->Position, &e->Velocity);
+
+	if (item->Collisions.HitXMin || item->Collisions.HitXMax) e->Velocity.x = 0.0f;
+	if (item->Collisions.HitZMin || item->Collisions.HitZMax) e->Velocity.z = 0.0f;
+	if (item->Collisions.HitYMin || item->Collisions.HitYMax) e->Velocity.y = 0.0f;
+
+	e->Velocity.x *= e->OnGround ? 0.70f : 0.98f;
+	e->Velocity.z *= e->OnGround ? 0.70f : 0.98f;
+	e->RotY = (float)(Game.Time * 90.0);
+	DroppedItem_TryPickup(item);
+}
+
+static void DroppedItem_SetLocation(struct Entity* e, struct LocationUpdate* update) {
+	if (update->flags & LU_HAS_POS) e->Position = update->pos;
+	if (update->flags & LU_HAS_PITCH) e->Pitch = update->pitch;
+	if (update->flags & LU_HAS_YAW) e->Yaw = update->yaw;
+	if (update->flags & LU_HAS_ROTX) e->RotX = update->rotX;
+	if (update->flags & LU_HAS_ROTZ) e->RotZ = update->rotZ;
+}
+
+static void DroppedItem_RenderModel(struct Entity* e, float delta, float t) {
+	Model_Render(e->Model, e);
+}
+
+static cc_bool DroppedItem_ShouldRenderName(struct Entity* e) { return false; }
+
+static const struct EntityVTABLE droppedItem_VTABLE = {
+	DroppedItem_Tick,        DroppedItem_Despawn,         DroppedItem_SetLocation, Entity_GetColor,
+	DroppedItem_RenderModel, DroppedItem_ShouldRenderName
+};
+
+static void DroppedItem_ClearAll(void) {
+	int i;
+	for (i = DROPPED_ITEMS_FIRST; i < ENTITIES_MAX_COUNT; i++) {
+		Entities_Remove(i);
+	}
+}
+
+static cc_bool DroppedItem_SpawnCore(BlockID block, Vec3 pos, Vec3 vel) {
+	struct DroppedItem* item;
+	struct Entity* e;
+	cc_string model; char modelBuffer[STRING_SIZE];
+	int i, raw, blockRaw;
+
+	if (block == BLOCK_AIR || Blocks.Draw[block] == DRAW_GAS) return false;
+	for (i = 0; i < MAX_DROPPED_ITEMS; i++) {
+		raw = DROPPED_ITEMS_FIRST + i;
+		if (Entities.List[raw]) continue;
+
+		item = &DroppedItems[i];
+		Mem_Set(item, 0, sizeof(struct DroppedItem));
+		e    = &item->Base;
+		Entity_Init(e);
+		e->VTABLE = &droppedItem_VTABLE;
+		e->Flags |= ENTITY_FLAG_HAS_MODELVB;
+		e->ShouldRender = true;
+
+		String_InitArray(model, modelBuffer);
+		blockRaw = block;
+		String_Format1(&model, "%i", &blockRaw);
+		Entity_SetModel(e, &model);
+		Vec3_Set(e->ModelScale, 0.35f, 0.35f, 0.35f);
+		Entity_UpdateModelBounds(e);
+
+		e->Position = pos;
+		e->Velocity = vel;
+
+		item->Block    = block;
+		item->Age      = 0.0f;
+		item->EntityID = raw;
+		item->Collisions.Entity = e;
+		item->Collisions.StepSize = 0.0f;
+		Entities.List[raw] = e;
+		Event_RaiseInt(&EntityEvents.Added, raw);
+		return true;
+	}
+	return false;
+}
+
+cc_bool DroppedItem_Spawn(BlockID block) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	Vec3 pos, vel, dir;
+
+	dir = Vec3_GetDirVector(p->Base.Yaw * MATH_DEG2RAD, p->Base.Pitch * MATH_DEG2RAD);
+	pos = Entity_GetEyePosition(&p->Base);
+	pos.x += dir.x * 0.6f;
+	pos.y += dir.y * 0.6f - 0.25f;
+	pos.z += dir.z * 0.6f;
+	Vec3_Set(vel, dir.x * 0.22f, dir.y * 0.22f + 0.12f, dir.z * 0.22f);
+
+	return DroppedItem_SpawnCore(block, pos, vel);
+}
+
+cc_bool DroppedItem_SpawnAt(BlockID block, Vec3 pos) {
+	Vec3 vel;
+	Vec3_Set(vel, 0.0f, 0.12f, 0.0f);
+	return DroppedItem_SpawnCore(block, pos, vel);
+}
+
+cc_bool DroppedItem_SpawnAtVelocity(BlockID block, Vec3 pos, Vec3 vel) {
+	return DroppedItem_SpawnCore(block, pos, vel);
+}
+
+cc_bool DroppedItem_RemoveNearest(BlockID block, Vec3 pos) {
+	struct DroppedItem* item;
+	struct Entity* e;
+	Vec3 delta;
+	float dist, bestDist = 64.0f;
+	int i, best = -1;
+
+	for (i = 0; i < MAX_DROPPED_ITEMS; i++) {
+		item = &DroppedItems[i];
+		if (item->Block != block) continue;
+		if (item->EntityID < DROPPED_ITEMS_FIRST) continue;
+		e = Entities.List[item->EntityID];
+		if (e != &item->Base) continue;
+
+		Vec3_Sub(&delta, &e->Position, &pos);
+		dist = Vec3_LengthSquared(&delta);
+		if (dist >= bestDist) continue;
+		bestDist = dist;
+		best     = i;
+	}
+
+	if (best < 0) return false;
+	Entities_Remove(DroppedItems[best].EntityID);
+	return true;
+}
+
 static cc_bool Entities_Tick(struct ScheduledTask2* task) {
 	int i;
 
@@ -671,6 +851,8 @@ struct IGameComponent TabList_Component = {
 *#########################################################################################################################*/
 struct LocalPlayer LocalPlayer_Instances[MAX_LOCAL_PLAYERS];
 static cc_bool hackPermMsgs;
+static cc_bool survivalSprintFovActive;
+static float survivalSprintFovCurrent;
 static struct LocalPlayerInput* sources_head;
 static struct LocalPlayerInput* sources_tail;
 
@@ -720,6 +902,113 @@ static void LocalPlayer_SetLocation(struct Entity* e, struct LocationUpdate* upd
 	LocalInterpComp_SetLocation(&p->Interp, update, e);
 }
 
+static void LocalPlayer_DoRespawn(struct LocalPlayer* p);
+
+static void LocalPlayer_Heal(struct LocalPlayer* p) {
+	p->Health = 20;
+	p->Stamina = 100.0f;
+	p->Sprinting = false;
+	p->SprintHeld = false;
+	p->SprintKeyDown = false;
+	p->SprintExhausted = false;
+	p->Sneaking = false;
+	p->SurvivalDamageCooldown = 0.0f;
+	p->SurvivalLavaCooldown   = 0.0f;
+}
+
+static void LocalPlayer_Damage(struct LocalPlayer* p, int damage) {
+	if (!Game_SurvivalMode || damage <= 0) return;
+	if (p->SurvivalDamageCooldown > 0.0f) return;
+
+	p->Health -= damage;
+	p->SurvivalDamageCooldown = 0.5f;
+	if (p->Health > 0) return;
+
+	Chat_AddRaw("&cYou died");
+	LocalPlayer_DoRespawn(p);
+	LocalPlayer_Heal(p);
+}
+
+static void LocalPlayer_UpdateSprintFov(cc_bool sprinting, float delta) {
+	int sprintFov = min(Camera.DefaultFov + 12, 110);
+	float target = sprinting ? (float)sprintFov : (float)Camera.DefaultFov;
+	float t = delta * 10.0f;
+	int fov;
+
+	if (t > 1.0f) t = 1.0f;
+
+	if (sprinting) {
+		if (!survivalSprintFovActive) {
+			survivalSprintFovActive = true;
+			survivalSprintFovCurrent = (float)Camera.Fov;
+		}
+	} else if (!survivalSprintFovActive) {
+		return;
+	}
+
+	survivalSprintFovCurrent += (target - survivalSprintFovCurrent) * t;
+	fov = (int)(survivalSprintFovCurrent + 0.5f);
+	Camera_SetFov(fov);
+
+	if (!sprinting && Math_AbsF(survivalSprintFovCurrent - target) < 0.5f) {
+		Camera_SetFov(Camera.DefaultFov);
+		survivalSprintFovCurrent = (float)Camera.DefaultFov;
+		survivalSprintFovActive = false;
+	}
+}
+
+static void LocalPlayer_UpdateSprint(struct LocalPlayer* p, float delta, float xMoving, float zMoving) {
+	struct Entity* e = &p->Base;
+	cc_bool movingForward;
+	cc_bool canSprint;
+
+	if (!Game_SurvivalMode || !World.Loaded) {
+		p->Sprinting = false;
+		p->SprintExhausted = false;
+		p->Hacks.BaseHorSpeed = 1.0f;
+		LocalPlayer_UpdateSprintFov(false, delta);
+		return;
+	}
+	if (p->Stamina <= 5.0f) p->SprintExhausted = true;
+	if (p->SprintExhausted && p->Stamina >= 25.0f) p->SprintExhausted = false;
+
+	movingForward = zMoving < 0.0f;
+	canSprint     = e->OnGround || p->Sprinting;
+	p->Sprinting = p->SprintHeld && !p->Sneaking && movingForward && canSprint && !p->SprintExhausted && p->Stamina > 5.0f;
+	if (p->Sprinting) {
+		p->Stamina -= 25.0f * delta;
+		if (p->Stamina <= 5.0f) {
+			if (p->Stamina < 0.0f) p->Stamina = 0.0f;
+			p->SprintExhausted = true;
+			p->Sprinting = false;
+		}
+	} else if (p->Stamina < 100.0f) {
+		p->Stamina += 15.0f * delta;
+		if (p->Stamina > 100.0f) p->Stamina = 100.0f;
+	}
+	p->Hacks.BaseHorSpeed = p->Sprinting ? 1.45f : (p->Sneaking ? 0.35f : 1.0f);
+	LocalPlayer_UpdateSprintFov(p->Sprinting, delta);
+}
+
+static void LocalPlayer_UpdateSurvival(struct LocalPlayer* p, float delta, cc_bool wasOnGround) {
+	struct Entity* e = &p->Base;
+	float fallSpeed;
+
+	if (!Game_SurvivalMode || !World.Loaded) return;
+	if (p->SurvivalDamageCooldown > 0.0f) p->SurvivalDamageCooldown -= delta;
+	if (p->SurvivalLavaCooldown   > 0.0f) p->SurvivalLavaCooldown   -= delta;
+
+	if (Entity_TouchesAnyLava(e) && p->SurvivalLavaCooldown <= 0.0f) {
+		p->SurvivalLavaCooldown = 0.75f;
+		LocalPlayer_Damage(p, 4);
+	}
+
+	if (!wasOnGround && e->OnGround && p->OldVelocity.y < -0.65f) {
+		fallSpeed = -p->OldVelocity.y;
+		LocalPlayer_Damage(p, (int)((fallSpeed - 0.65f) * 10.0f));
+	}
+}
+
 static void LocalPlayer_Tick(struct Entity* e, float delta) {
 	struct LocalPlayer* p = (struct LocalPlayer*)e;
 	struct HacksComp* hacks = &p->Hacks;
@@ -734,6 +1023,7 @@ static void LocalPlayer_Tick(struct Entity* e, float delta) {
 
 	LocalInterpComp_AdvanceState(&p->Interp, e);
 	LocalPlayer_HandleInput(p, &xMoving, &zMoving);
+	LocalPlayer_UpdateSprint(p, delta, xMoving, zMoving);
 	hacks->Floating = hacks->Noclip || hacks->Flying;
 	if (!hacks->Floating && hacks->CanBePushed) PhysicsComp_DoEntityPush(e);
 
@@ -752,6 +1042,7 @@ static void LocalPlayer_Tick(struct Entity* e, float delta) {
 	e->next.pos = e->Position; e->Position = e->prev.pos;
 	AnimatedComp_Update(e, e->prev.pos, e->next.pos, delta);
 	TiltComp_Update(p, &p->Tilt, delta);
+	LocalPlayer_UpdateSurvival(p, delta, wasOnGround);
 
 	Entity_CheckSkin(&p->Base);
 	SoundComp_Tick(p, wasOnGround);
@@ -799,6 +1090,7 @@ static void LocalPlayer_Init(struct LocalPlayer* p, int index) {
 	p->Physics.Collisions = &p->Collisions;
 	p->Base.VTABLE   = &localPlayer_VTABLE;
 	p->index = index;
+	LocalPlayer_Heal(p);
 
 	hacks->Enabled = !Game_PureClassic && Options_GetBool(OPT_HACKS_ENABLED, true);
 	if (Game_ClassicMode) return;
@@ -822,6 +1114,12 @@ void LocalPlayer_ResetJumpVelocity(struct LocalPlayer* p) {
 
 static void LocalPlayer_Reset(struct LocalPlayer* p) {
 	p->ReachDistance = 5.0f;
+	p->Stamina = 100.0f;
+	p->Sprinting = false;
+	p->SprintHeld = false;
+	p->SprintKeyDown = false;
+	p->SprintExhausted = false;
+	p->Sneaking = false;
 	Vec3_Set(p->Base.Velocity, 0,0,0);
 	LocalPlayer_ResetJumpVelocity(p);
 }
@@ -842,6 +1140,7 @@ static void LocalPlayer_OnNewMap(struct LocalPlayer* p) {
 	p->_warnedFly     = false;
 	p->_warnedNoclip  = false;
 	p->_warnedZoom    = false;
+	LocalPlayer_Heal(p);
 }
 
 static void LocalPlayers_OnNewMap(void) {
@@ -850,6 +1149,7 @@ static void LocalPlayers_OnNewMap(void) {
 	{
 		LocalPlayer_OnNewMap(&LocalPlayer_Instances[i]);
 	}
+	DroppedItem_ClearAll();
 }
 
 static cc_bool LocalPlayer_IsSolidCollide(BlockID b) { return Blocks.Collide[b] == COLLIDE_SOLID; }
@@ -902,6 +1202,7 @@ static void LocalPlayer_DoRespawn(struct LocalPlayer* p) {
 	Entity_GetBounds(&p->Base, &bb);
 	bb.Min.y -= 0.01f; bb.Max.y = bb.Min.y;
 	p->Base.OnGround = Entity_TouchesAny(&bb, LocalPlayer_IsSolidCollide);
+	LocalPlayer_Heal(p);
 }
 
 static cc_bool LocalPlayer_HandleRespawn(int key, struct InputDevice* device) {
@@ -1003,30 +1304,53 @@ static cc_bool LocalPlayer_HandleJump(int key, struct InputDevice* device) {
 
 
 static cc_bool LocalPlayer_TriggerHalfSpeed(int key, struct InputDevice* device) {
-	struct HacksComp* hacks = &LocalPlayer_Instances[device->mappedIndex].Hacks;
+	struct LocalPlayer* p = &LocalPlayer_Instances[device->mappedIndex];
+	struct HacksComp* hacks = &p->Hacks;
 	cc_bool touch = device->type == INPUT_DEVICE_TOUCH;
 	if (Gui.InputGrab) return false;
 
+	if (Game_SurvivalMode) {
+		p->Sneaking = true;
+		p->Sprinting = false;
+		return true;
+	}
 	hacks->HalfSpeeding = (!touch || !hacks->HalfSpeeding) && hacks->Enabled;
 	return true;
 }
 
 static cc_bool LocalPlayer_TriggerSpeed(int key, struct InputDevice* device) {
-	struct HacksComp* hacks = &LocalPlayer_Instances[device->mappedIndex].Hacks;
+	struct LocalPlayer* p = &LocalPlayer_Instances[device->mappedIndex];
+	struct HacksComp* hacks = &p->Hacks;
 	cc_bool touch = device->type == INPUT_DEVICE_TOUCH;
 	if (Gui.InputGrab) return false;
 
+	if (Game_SurvivalMode) {
+		p->SprintHeld = true;
+		p->SprintKeyDown = true;
+		return true;
+	}
 	hacks->Speeding = (!touch || !hacks->Speeding) && hacks->Enabled;
 	return true;
 }
 
 static void LocalPlayer_ReleaseHalfSpeed(int key, struct InputDevice* device) {
-	struct HacksComp* hacks = &LocalPlayer_Instances[device->mappedIndex].Hacks;
+	struct LocalPlayer* p = &LocalPlayer_Instances[device->mappedIndex];
+	struct HacksComp* hacks = &p->Hacks;
+	if (Game_SurvivalMode) {
+		p->Sneaking = false;
+		return;
+	}
 	if (device->type != INPUT_DEVICE_TOUCH) hacks->HalfSpeeding = false;
 }
 
 static void LocalPlayer_ReleaseSpeed(int key, struct InputDevice* device) {
-	struct HacksComp* hacks = &LocalPlayer_Instances[device->mappedIndex].Hacks;
+	struct LocalPlayer* p = &LocalPlayer_Instances[device->mappedIndex];
+	struct HacksComp* hacks = &p->Hacks;
+	if (Game_SurvivalMode) {
+		p->SprintHeld = false;
+		p->SprintKeyDown = false;
+		return;
+	}
 	if (device->type != INPUT_DEVICE_TOUCH) hacks->Speeding = false;
 }
 
@@ -1064,8 +1388,6 @@ static void LocalPlayer_ReleaseNoclip(int key, struct InputDevice* device) {
 }
 
 static void LocalPlayer_HookBinds(void) {
-	Bind_OnTriggered[BIND_RESPAWN]   = LocalPlayer_HandleRespawn;
-	Bind_OnTriggered[BIND_SET_SPAWN] = LocalPlayer_HandleSetSpawn;
 	Bind_OnTriggered[BIND_FLY]       = LocalPlayer_HandleFly;
 	Bind_OnTriggered[BIND_NOCLIP]    = LocalPlayer_HandleNoclip;
 	Bind_OnTriggered[BIND_JUMP]      = LocalPlayer_HandleJump;

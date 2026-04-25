@@ -482,6 +482,7 @@ static void DrawBitmappedTextCore(struct Bitmap* bmp, struct DrawTextArgs* args,
 			i++; continue; /* skip over the color code */
 		}
 
+		if (count >= DRAWER2D_MAX_TEXT_LENGTH) break; // Add this check
 		coords[count] = c;
 		colors[count] = color;
 		dstWidths[count] = Drawer2D_Width(point, c);

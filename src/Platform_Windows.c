@@ -686,6 +686,33 @@ cc_result Socket_Create(cc_socket* s, cc_sockaddr* addr) {
 	return 0;
 }
 
+cc_result Socket_CreateListener(cc_socket* s, int port) {
+	SOCKADDR_IN addr;
+	int res, yes = 1;
+
+	*s = _socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (*s == -1) return _WSAGetLastError();
+
+	_setsockopt(*s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
+	Mem_Set(&addr, 0, sizeof(addr));
+	addr.sin_family      = AF_INET;
+	addr.sin_addr.S_un.S_addr = INADDR_ANY;
+	addr.sin_port        = SockAddr_EncodePort(port);
+
+	res = _bind(*s, (SOCKADDR*)&addr, sizeof(addr));
+	if (res == -1) { res = _WSAGetLastError(); Socket_Close(*s); return res; }
+
+	res = _listen(*s, SOMAXCONN);
+	if (res == -1) { res = _WSAGetLastError(); Socket_Close(*s); return res; }
+	return 0;
+}
+
+cc_result Socket_Accept(cc_socket s, cc_socket* client) {
+	*client = _accept(s, NULL, NULL);
+	if (*client == -1) return _WSAGetLastError();
+	return 0;
+}
+
 cc_result Socket_SetNonBlocking(cc_socket s, cc_bool nonblocking) {
 	u_long mode = nonblocking ? -1 : 0;
 	int res     = _ioctlsocket(s, FIONBIO, &mode);
@@ -845,16 +872,16 @@ cc_bool Updater_Supported = true;
 const struct UpdaterInfo Updater_Info = {
 	"&eDirect3D 9 is recommended", 2,
 	{
-		{ "Direct3D9", "ClassiCube.exe" },
-		{ "OpenGL",    "ClassiCube.opengl.exe" }
+		{ "Direct3D9", "CavFX.exe" },
+		{ "OpenGL",    "CavFX.opengl.exe" }
 	}
 };
 #elif defined _M_X64
 const struct UpdaterInfo Updater_Info = {
 	"&eDirect3D 9 is recommended", 2,
 	{
-		{ "Direct3D9", "ClassiCube.64.exe" },
-		{ "OpenGL",    "ClassiCube.64-opengl.exe" }
+		{ "Direct3D9", "CavFX.64.exe" },
+		{ "OpenGL",    "CavFX.64-opengl.exe" }
 	}
 };
 #elif defined _M_ARM64
@@ -975,7 +1002,7 @@ cc_bool DynamicLib_DescribeError(cc_string* dst) {
 	/* Plugin may have been compiled to load symbols from ClassiCube.exe, */
 	/*  but the user might have renamed it to something else */
 	if (res == ERROR_MOD_NOT_FOUND  && loadingPlugin) {
-		String_AppendConst(dst, "\n    Make sure the ClassiCube executable is named ClassiCube.exe");
+		String_AppendConst(dst, "\n    Make sure the CavFX executable is named CavFX.exe");
 	}
 	if (res == ERROR_PROC_NOT_FOUND && loadingPlugin) {
 		String_AppendConst(dst, "\n    The plugin or your game may be outdated");

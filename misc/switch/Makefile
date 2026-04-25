@@ -14,6 +14,8 @@ TARGET 		= ClassiCube-switch
 SOURCE_DIRS	= src src/switch third_party/bearssl
 # Directory where object files are placed
 BUILD_DIR	= build/switch
+PRELOAD_DIR = src/preload
+PRELOAD_ROOT = $(BUILD_DIR)/sdroot/switch/ClassiCube
 
 APP_TITLE 	= ClassiCube
 APP_AUTHOR 	= ClassiCube team
@@ -68,13 +70,16 @@ NACPTOOL := $(DEVKITPRO)/tools/bin/nacptool
 #---------------------------------------------------------------------------------
 # Main targets
 #---------------------------------------------------------------------------------
-default: $(BUILD_DIR) $(TARGET).nro
+default: $(BUILD_DIR) $(TARGET).nro copy-preload
 
 clean:
 	rm $(TARGET).nro $(BUILD_DIR)/$(TARGET).nacp $(TARGET).elf $(OBJS)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+copy-preload:
+	if [ -d "$(PRELOAD_DIR)" ]; then mkdir -p "$(PRELOAD_ROOT)" && cp -r "$(PRELOAD_DIR)"/* "$(PRELOAD_ROOT)"/ 2>/dev/null || true; fi
 
 
 #---------------------------------------------------------------------------------

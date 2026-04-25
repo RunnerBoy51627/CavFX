@@ -77,6 +77,8 @@ static struct HUDScreen {
 	cc_bool hacksChanged;
 	float lastSpeed;
 	int lastFov;
+	int lastHealth;
+	int lastStamina;
 	int lastX, lastY, lastZ;
 	struct HotbarWidget hotbar;
 } HUDScreen_Instance CC_BIG_VAR;
@@ -85,7 +87,13 @@ static struct HUDScreen {
 #define POSITION_VAL_CHARS 11
 /* [PREFIX] [(] [X] [,] [Y] [,] [Z] [)] */
 #define POSITION_HUD_CHARS (1 + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1)
-#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4)
+#define SURVIVAL_HEARTS 10
+#define SURVIVAL_HEART_VERTICES (SURVIVAL_HEARTS * 2 * 4)
+#define SURVIVAL_STAMINA 10
+#define SURVIVAL_STAMINA_ICON_SIZE 9
+#define SURVIVAL_STAMINA_VERTICES (SURVIVAL_STAMINA * SURVIVAL_STAMINA_ICON_SIZE * SURVIVAL_STAMINA_ICON_SIZE * 4)
+#define SURVIVAL_HUD_VERTICES (SURVIVAL_HEART_VERTICES + SURVIVAL_STAMINA_VERTICES)
+#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES + SURVIVAL_HUD_VERTICES + POSITION_HUD_CHARS * 4)
 
 static void HUDScreen_RemakeLine1(struct HUDScreen* s) {
 	cc_string status; char statusBuffer[STRING_SIZE * 2];
@@ -170,23 +178,27 @@ static void HUDScreen_RemakeLine2(struct HUDScreen* s) {
 
 	if (Game_ClassicMode) {
 		TextWidget_SetConst(&s->line2, Game_Version.Name, &s->font);
+		s->lastHealth = Entities.CurPlayer->Health;
+		s->lastStamina = (int)Entities.CurPlayer->Stamina;
 		return;
 	}
 
 	speed = HacksComp_CalcSpeedFactor(hacks, hacks->CanSpeed);
 	s->lastSpeed = speed; s->lastFov = Camera.Fov;
 	s->hacksChanged = false;
-
 	String_InitArray(status, statusBuffer);
+	/*
 	if (Camera.Fov != Camera.DefaultFov) {
 		String_Format1(&status, "Zoom fov %i  ", &Camera.Fov);
 	}
-
+	*/
 	if (hacks->Flying) String_AppendConst(&status, "Fly ON   ");
 	if (speed)         String_Format1(&status, "Speed %f1x   ", &speed);
 	if (hacks->Noclip) String_AppendConst(&status, "Noclip ON   ");
 
 	TextWidget_Set(&s->line2, &status, &s->font);
+	s->lastHealth = Entities.CurPlayer->Health;
+	s->lastStamina = (int)Entities.CurPlayer->Stamina;
 }
 
 
@@ -236,17 +248,17 @@ static void HUDScreen_Layout(void* screen) {
 	s->posAtlas.tex.y = posY;
 	Widget_SetLocation(line2, ANCHOR_MIN, ANCHOR_MIN, 
 						2 + DisplayInfo.ContentOffsetX, 0);
-
+	
 	if (Game_ClassicMode) {
-		/* Swap around so 0.30 version is at top */
+		// Swap around so 0.30 version is at top
 		line2->yOffset = line1->yOffset;
 		line1->yOffset = posY;
 		Widget_Layout(line1);
 	} else {
-		/* We can't use y in TextWidget_Make because that DPI scales it */
+		/// We can't use y in TextWidget_Make because that DPI scales it
 		line2->yOffset = posY + s->posAtlas.tex.height;
 	}
-
+	
 	HUDScreen_LayoutHotbar();
 	Widget_Layout(line2);
 }
@@ -340,6 +352,13 @@ static void HUDScreen_Update(void* screen, float delta) {
 
 	HUDScreen_UpdateFPS(s,          delta);
 	HotbarWidget_Update(&s->hotbar, delta);
+	if (Game_SurvivalMode && s->lastHealth != Entities.CurPlayer->Health) {
+		HUDScreen_RemakeLine2(s);
+	}
+	if (Game_SurvivalMode && s->lastStamina != (int)Entities.CurPlayer->Stamina) {
+		s->lastStamina = (int)Entities.CurPlayer->Stamina;
+		s->dirty = true;
+	}
 	if (Game_ClassicMode) return;
 
 	if (IsOnlyChatActive() && Gui.ShowFPS) {
@@ -367,6 +386,110 @@ static void HUDScreen_BuildCrosshairsMesh(struct VertexTextured** ptr) {
 	Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, ptr);
 }
 
+static void HUDScreen_BuildHeart(struct Texture* tex, struct VertexTextured** ptr, int iconX) {
+	tex->uv.u1 = iconX / 256.0f;
+	tex->uv.u2 = (iconX + 9) / 256.0f;
+	Gfx_Make2DQuad(tex, PACKEDCOL_WHITE, ptr);
+}
+
+static void HUDScreen_BuildHealthMesh(struct HUDScreen* s, struct VertexTextured** ptr) {
+	static struct Texture tex = { 0, Tex_Rect(0,0,9,9), Tex_UV(0.0f,0.0f,9/256.0f,9/64.0f) };
+	float scaleX = s->hotbar.scale * DisplayInfo.ScaleX;
+	float scaleY = s->hotbar.scale * DisplayInfo.ScaleY;
+	int health = Entities.CurPlayer->Health;
+	int sizeX  = Math_Ceil(9.0f * scaleX);
+	int sizeY  = Math_Ceil(9.0f * scaleY);
+	int stepX  = Math_Ceil(8.0f * scaleX);
+	int i, x;
+
+	tex.x      = s->hotbar.x;
+	tex.y      = s->hotbar.y - sizeY - Math_Ceil(4.0f * DisplayInfo.ScaleY);
+	tex.width  = sizeX;
+	tex.height = sizeY;
+	tex.uv.v1 = 0.0f;
+	tex.uv.v2 = 9 / 64.0f;
+
+	for (i = 0; i < SURVIVAL_HEARTS; i++) {
+		x = tex.x;
+		tex.x = x + i * stepX;
+		HUDScreen_BuildHeart(&tex, ptr, 16);
+
+		if (health >= (i + 1) * 2) {
+			HUDScreen_BuildHeart(&tex, ptr, 52);
+		} else if (health == i * 2 + 1) {
+			HUDScreen_BuildHeart(&tex, ptr, 61);
+		} else {
+			HUDScreen_BuildHeart(&tex, ptr, 16);
+		}
+		tex.x = x;
+	}
+}
+
+static void HUDScreen_BuildStaminaRect(struct Texture* tex, struct VertexTextured** ptr, int x, int y, int w, int h, PackedCol col) {
+	tex->x = x; tex->y = y; tex->width = w; tex->height = h;
+	Gfx_Make2DQuad(tex, col, ptr);
+}
+
+static void HUDScreen_BuildStaminaBolt(struct Texture* tex, struct VertexTextured** ptr, int x, int y, int scale, PackedCol col) {
+	static const char* fill[SURVIVAL_STAMINA_ICON_SIZE] = {
+		".........",
+		".........",
+		".........",
+		"XX..XX...",
+		"XXXXXXX..",
+		".XXXXXXX.",
+		"...XX.XXX",
+		".......XX",
+		"........."
+	};
+	int px, py, nx, ny;
+	cc_bool filled, outline;
+
+	for (py = 0; py < SURVIVAL_STAMINA_ICON_SIZE; py++) {
+		for (px = 0; px < SURVIVAL_STAMINA_ICON_SIZE; px++) {
+			filled = fill[py][px] == 'X';
+			outline = filled;
+			if (!outline) {
+				for (ny = -1; ny <= 1 && !outline; ny++) {
+					for (nx = -1; nx <= 1; nx++) {
+						if (nx && ny) continue;
+						if (px + nx < 0 || px + nx >= SURVIVAL_STAMINA_ICON_SIZE) continue;
+						if (py + ny < 0 || py + ny >= SURVIVAL_STAMINA_ICON_SIZE) continue;
+						if (fill[py + ny][px + nx] == 'X') { outline = true; break; }
+					}
+				}
+			}
+
+			if (!outline) {
+				HUDScreen_BuildStaminaRect(tex, ptr, x, y, 0, 0, PACKEDCOL_WHITE);
+			} else {
+				HUDScreen_BuildStaminaRect(tex, ptr, x + px * scale, y + py * scale, scale, scale,
+					filled ? col : PackedCol_Make(0, 0, 0, 255));
+			}
+		}
+	}
+}
+
+static void HUDScreen_BuildStaminaMesh(struct HUDScreen* s, struct VertexTextured** ptr) {
+	static struct Texture tex = { 0, Tex_Rect(0,0,1,1), Tex_UV(7/256.0f,7/64.0f,8/256.0f,8/64.0f) };
+	float scaleF = s->hotbar.scale * DisplayInfo.ScaleX;
+	int scale = max(1, Math_Ceil(scaleF));
+	int step = Math_Ceil(8.0f * s->hotbar.scale * DisplayInfo.ScaleX);
+	int meterWidth = (SURVIVAL_STAMINA - 1) * step + SURVIVAL_STAMINA_ICON_SIZE * scale;
+	int x = s->hotbar.x + s->hotbar.width - meterWidth;
+	int y = s->hotbar.y - Math_Ceil(9.0f * s->hotbar.scale * DisplayInfo.ScaleY) - Math_Ceil(4.0f * DisplayInfo.ScaleY);
+	int stamina = (int)Entities.CurPlayer->Stamina;
+	int filled = Math_Ceil(stamina / 10.0f);
+	int firstFilled = SURVIVAL_STAMINA - filled;
+	PackedCol on = stamina <= 20 ? PackedCol_Make(255, 58, 34, 255) : PackedCol_Make(255, 219, 28, 255);
+	PackedCol off = PackedCol_Make(76, 76, 76, 255);
+	int i;
+
+	for (i = 0; i < SURVIVAL_STAMINA; i++) {
+		HUDScreen_BuildStaminaBolt(&tex, ptr, x + i * step, y, scale, i >= firstFilled ? on : off);
+	}
+}
+
 static void HUDScreen_BuildMesh(void* screen) {
 	struct HUDScreen* s = (struct HUDScreen*)screen;
 	struct VertexTextured* data;
@@ -379,6 +502,10 @@ static void HUDScreen_BuildMesh(void* screen) {
 	Widget_BuildMesh(&s->line1,  ptr);
 	Widget_BuildMesh(&s->line2,  ptr);
 	Widget_BuildMesh(&s->hotbar, ptr);
+	if (Game_SurvivalMode) {
+		HUDScreen_BuildHealthMesh(s, ptr);
+		HUDScreen_BuildStaminaMesh(s, ptr);
+	}
 
 	if (!Game_ClassicMode) 
 		HUDScreen_BuildPosition(s, data);
@@ -387,6 +514,7 @@ static void HUDScreen_BuildMesh(void* screen) {
 
 static void HUDScreen_Render(void* screen, float delta) {
 	struct HUDScreen* s = (struct HUDScreen*)screen;
+	int survivalOffset = Game_SurvivalMode ? SURVIVAL_HUD_VERTICES : 0;
 	if (Game_HideGui) return;
 
 	Gfx_3DS_SetRenderScreen(TOP_SCREEN);
@@ -400,7 +528,7 @@ static void HUDScreen_Render(void* screen, float delta) {
 	} else if (IsOnlyChatActive() && Gui.ShowFPS) {
 		Widget_Render2(&s->line2, 8);
 		Gfx_BindTexture(s->posAtlas.tex.ID);
-		Gfx_DrawVb_IndexedTris_Range(s->posCount, 12 + HOTBAR_MAX_VERTICES, DRAW_HINT_RECT);
+		Gfx_DrawVb_IndexedTris_Range(s->posCount, 12 + HOTBAR_MAX_VERTICES + survivalOffset, DRAW_HINT_RECT);
 		/* TODO swap these two lines back */
 	}
 
@@ -412,6 +540,11 @@ static void HUDScreen_Render(void* screen, float delta) {
 			Gfx_BindTexture(Gui.IconsTex);
 			Gfx_BindDynamicVb(s->vb); /* Have to rebind for mobile right now... */
 			Gfx_DrawVb_IndexedTris_Range(4, 0, DRAW_HINT_SPRITE);
+		}
+		if (Game_SurvivalMode && Gui.IconsTex) {
+			Gfx_BindTexture(Gui.IconsTex);
+			Gfx_BindDynamicVb(s->vb);
+			Gfx_DrawVb_IndexedTris_Range(SURVIVAL_HUD_VERTICES, 12 + HOTBAR_MAX_VERTICES, DRAW_HINT_SPRITE);
 		}
 	}
 
@@ -1716,12 +1849,19 @@ static struct InventoryScreen {
 	struct FontDesc font;
 	struct TableWidget table;
 	struct TextWidget title;
+	int craftX, craftY, craftSlot, craftOutX, craftOutY;
+	int craftState[(INVENTORY_CRAFTING_GRID + 2) * ISOMETRICDRAWER_MAXVERTICES / 4];
+	int craftVerticesCount;
+	int lastCraftSlot;
+	double lastCraftClick;
+	BlockID heldBlock;
+	cc_uint8 heldCount;
 	cc_bool releasedInv, deferredSelect;
 	struct Widget* __widgets[2];
 } InventoryScreen CC_BIG_VAR;
 
 
-static void InventoryScreen_GetTitleText(cc_string* desc, BlockID block) {
+static void InventoryScreen_GetTitleText(cc_string* desc, BlockID block, int count) {
 	cc_string name;
 	int block_ = block;
 	if (Game_PureClassic) { String_AppendConst(desc, "Select block"); return; }
@@ -1729,6 +1869,10 @@ static void InventoryScreen_GetTitleText(cc_string* desc, BlockID block) {
 
 	name = Block_UNSAFE_GetName(block);
 	String_AppendString(desc, &name);
+	if (Game_SurvivalMode) {
+		if (count > 1) String_Format1(desc, " x%i", &count);
+		return;
+	}
 	if (Game_ClassicMode) return;
 
 	String_Format1(desc, " (ID %i&f", &block_);
@@ -1737,17 +1881,17 @@ static void InventoryScreen_GetTitleText(cc_string* desc, BlockID block) {
 	String_Append(desc, ')');
 }
 
-static void InventoryScreen_UpdateTitle(struct InventoryScreen* s, BlockID block) {
+static void InventoryScreen_UpdateTitle(struct InventoryScreen* s, BlockID block, int count) {
 	cc_string desc; char descBuffer[STRING_SIZE * 2];
 
 	String_InitArray(desc, descBuffer);
-	InventoryScreen_GetTitleText(&desc, block);
+	InventoryScreen_GetTitleText(&desc, block, count);
 	TextWidget_Set(&s->title, &desc, &s->font);
 	s->dirty = true;
 }
 
-static void InventoryScreen_OnUpdateTitle(BlockID block) {
-	InventoryScreen_UpdateTitle(&InventoryScreen, block);
+static void InventoryScreen_OnUpdateTitle(BlockID block, int count) {
+	InventoryScreen_UpdateTitle(&InventoryScreen, block, count);
 }
 
 
@@ -1777,6 +1921,43 @@ static void InventoryScreen_ContextRecreated(void* screen) {
 	TableWidget_RecreateTitle(&s->table, true);
 }
 
+static void InventoryScreen_BuildCraftMesh(struct InventoryScreen* s, struct VertexTextured** ptr) {
+	int i, x, y;
+	IsometricDrawer_BeginBatch(*ptr, s->craftState);
+
+	for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
+		if (Inventory.Craft[i] == BLOCK_AIR || !Inventory.CraftCounts[i]) continue;
+		x = s->craftX + (i & 1) * s->craftSlot + s->craftSlot / 2;
+		y = s->craftY + (i >> 1) * s->craftSlot + s->craftSlot / 2;
+		IsometricDrawer_AddBatch(Inventory.Craft[i], s->craftSlot * 0.30f, x, y);
+	}
+	if (Inventory.CraftResult != BLOCK_AIR && Inventory.CraftResultCount) {
+		x = s->craftOutX + s->craftSlot / 2;
+		y = s->craftOutY + s->craftSlot / 2;
+		IsometricDrawer_AddBatch(Inventory.CraftResult, s->craftSlot * 0.30f, x, y);
+	}
+	if (s->heldBlock != BLOCK_AIR && s->heldCount) {
+		IsometricDrawer_AddBatch(s->heldBlock, s->craftSlot * 0.30f, Pointers[0].x, Pointers[0].y);
+	}
+
+	s->craftVerticesCount = IsometricDrawer_EndBatch();
+	*ptr += (INVENTORY_CRAFTING_GRID + 2) * ISOMETRICDRAWER_MAXVERTICES;
+}
+
+static void InventoryScreen_BuildMesh(void* screen) {
+	struct InventoryScreen* s = (struct InventoryScreen*)screen;
+	struct VertexTextured* data;
+	struct VertexTextured** ptr;
+
+	if (!Game_SurvivalMode) { Screen_BuildMesh(screen); return; }
+	data = Screen_LockVb(s);
+	ptr  = &data;
+	Widget_BuildMesh(&s->title, ptr);
+	Widget_BuildMesh(&s->table, ptr);
+	InventoryScreen_BuildCraftMesh(s, ptr);
+	Gfx_UnlockDynamicVb(s->vb);
+}
+
 static void InventoryScreen_MoveToSelected(struct InventoryScreen* s) {
 	struct TableWidget* table = &s->table;
 	int blockForTitle;
@@ -1799,7 +1980,7 @@ static void InventoryScreen_MoveToSelected(struct InventoryScreen* s) {
 
 		if (table->selectedIndex == -1) {
 			/* Hidden block in inventory - display title for it still */
-			InventoryScreen_OnUpdateTitle(Inventory_SelectedBlock);
+			InventoryScreen_OnUpdateTitle(Inventory_SelectedBlock, Inventory_SelectedCount);
 		} else {
 			TableWidget_RecreateTitleForBlock(table, true, blockForTitle);
 		}
@@ -1815,6 +1996,7 @@ static void InventoryScreen_Init(void* screen) {
 	TextWidget_Add(s,  &s->title);
 	TableWidget_Add(s, &s->table, 22 * Options_GetFloat(OPT_INV_SCROLLBAR_SCALE, 0, 10, 1));
 	s->table.blocksPerRow = Inventory.BlocksPerRow;
+	s->table.countFont    = &s->font;
 	s->table.UpdateTitle   = InventoryScreen_OnUpdateTitle;
 	TableWidget_RecreateBlocks(&s->table);
 
@@ -1822,17 +2004,41 @@ static void InventoryScreen_Init(void* screen) {
 	/*  status might be toggled *after* InventoryScreen_Init() is called */
 	/* That causes the cursor to be moved back to the middle of the window */
 	s->deferredSelect = true;
+	s->lastCraftSlot  = -1;
+	s->lastCraftClick = 0.0;
+	s->heldBlock      = BLOCK_AIR;
+	s->heldCount      = 0;
 
 	Event_Register_(&TextureEvents.AtlasChanged,     s, InventoryScreen_NeedRedrawing);
 	Event_Register_(&BlockEvents.PermissionsChanged, s, InventoryScreen_OnBlockChanged);
 	Event_Register_(&BlockEvents.BlockDefChanged,    s, InventoryScreen_OnBlockChanged);
 
-	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
+	s->maxVertices = Screen_CalcDefaultMaxVertices(s) + (INVENTORY_CRAFTING_GRID + 2) * ISOMETRICDRAWER_MAXVERTICES;
 }
 
 static void InventoryScreen_Free(void* screen) {
 	struct InventoryScreen* s = (struct InventoryScreen*)screen;
 
+	if (Game_SurvivalMode) Inventory_ReturnCrafting();
+	if (Game_SurvivalMode && s->heldBlock != BLOCK_AIR && s->heldCount) {
+		if (!Inventory_TryAddCount(s->heldBlock, s->heldCount)) {
+			while (s->heldCount) {
+				struct LocalPlayer* p = Entities.CurPlayer;
+				Vec3 pos, vel, dir;
+				dir = Vec3_GetDirVector(p->Base.Yaw * MATH_DEG2RAD, p->Base.Pitch * MATH_DEG2RAD);
+				pos = Entity_GetEyePosition(&p->Base);
+				pos.x += dir.x * 0.6f;
+				pos.y += dir.y * 0.6f - 0.25f;
+				pos.z += dir.z * 0.6f;
+				Vec3_Set(vel, dir.x * 0.22f, dir.y * 0.22f + 0.12f, dir.z * 0.22f);
+				if (!DroppedItem_SpawnAtVelocity(s->heldBlock, pos, vel)) break;
+				Server_SendDroppedItem(s->heldBlock, pos, vel);
+				s->heldCount--;
+			}
+		}
+		s->heldBlock = BLOCK_AIR;
+		s->heldCount = 0;
+	}
 	Event_Unregister_(&TextureEvents.AtlasChanged,     s, InventoryScreen_NeedRedrawing);
 	Event_Unregister_(&BlockEvents.PermissionsChanged, s, InventoryScreen_OnBlockChanged);
 	Event_Unregister_(&BlockEvents.BlockDefChanged,    s, InventoryScreen_OnBlockChanged);
@@ -1845,20 +2051,46 @@ static void InventoryScreen_Update(void* screen, float delta) {
 
 static void InventoryScreen_Render(void* screen, float delta) {
 	struct InventoryScreen* s = (struct InventoryScreen*)screen;
+	int slot = s->craftSlot;
 	Widget_Render2(&s->table, TEXTWIDGET_MAX);
 	Widget_Render2(&s->title,              0);
+
+	if (!Game_SurvivalMode) return;
+	Gfx_Draw2DFlat(s->craftX,        s->craftY,        slot, slot, PackedCol_Make(34, 34, 34, 168));
+	Gfx_Draw2DFlat(s->craftX + slot, s->craftY,        slot, slot, PackedCol_Make(34, 34, 34, 168));
+	Gfx_Draw2DFlat(s->craftX,        s->craftY + slot, slot, slot, PackedCol_Make(34, 34, 34, 168));
+	Gfx_Draw2DFlat(s->craftX + slot, s->craftY + slot, slot, slot, PackedCol_Make(34, 34, 34, 168));
+	Gfx_Draw2DFlat(s->craftOutX,     s->craftOutY,     slot, slot, PackedCol_Make(57, 57, 104, 202));
+
+	if (s->craftVerticesCount) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		Gfx_BindDynamicVb(s->vb);
+		IsometricDrawer_Render(s->craftVerticesCount, TEXTWIDGET_MAX + TABLE_MAX_VERTICES, s->craftState);
+	}
 }
 
 static void InventoryScreen_Layout(void* screen) {
 	struct InventoryScreen* s = (struct InventoryScreen*)screen;
 	s->table.scale = Gui_GetInventoryScale();
 	Widget_SetLocation(&s->table, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 0);
+	if (Game_SurvivalMode) s->table.blocksPerRow = 9;
+	TableWidget_RecreateBlocks(&s->table);
 
 	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_MIN, 0, 0);
 	/* use Table(Y) directly instead of s->title->height ??? */
 	s->title.yOffset = s->table.y - s->title.height - 3;
 	Widget_Layout(&s->title); /* Needed for yOffset */
+
+	if (Game_SurvivalMode) {
+		s->craftSlot = Display_ScaleX(42 * Math_SqrtF(s->table.scale));
+		s->craftX    = s->table.x + s->table.width + Display_ScaleX(32);
+		s->craftY    = s->table.y;
+		s->craftOutX = s->craftX + s->craftSlot * 3;
+		s->craftOutY = s->craftY + s->craftSlot / 2;
+	}
 }
+
+static cc_bool InventoryScreen_HandleSurvivalClick(struct InventoryScreen* s, int x, int y, cc_bool right);
 
 static int InventoryScreen_KeyDown(void* screen, int key, struct InputDevice* device) {
 	struct InventoryScreen* s = (struct InventoryScreen*)screen;
@@ -1868,8 +2100,14 @@ static int InventoryScreen_KeyDown(void* screen, int key, struct InputDevice* de
 	if (InputBind_Claims(BIND_INVENTORY, key, device) && s->releasedInv && !Game_ClassicMode) {
 		Gui_Remove((struct Screen*)s);
 		CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
+	} else if (Game_SurvivalMode && key == CCMOUSE_R) {
+		return InventoryScreen_HandleSurvivalClick(s, Pointers[0].x, Pointers[0].y, true);
 	} else if (InputDevice_IsEnter(key, device) && table->selectedIndex != -1) {
-		Inventory_SetSelectedBlock(table->blocks[table->selectedIndex]);
+		if (Game_SurvivalMode) {
+			Inventory_PickBlock(table->blocks[table->selectedIndex]);
+		} else {
+			Inventory_SetSelectedBlock(table->blocks[table->selectedIndex]);
+		}
 		Gui_Remove((struct Screen*)s);
 		CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
 	} else if (Elem_HandlesKeyDown(table, key, device)) {
@@ -1890,11 +2128,224 @@ static void InventoryScreen_KeyUp(void* screen, int key, struct InputDevice* dev
 	if (InputBind_Claims(BIND_INVENTORY, key, device)) s->releasedInv = true;
 }
 
+static int InventoryScreen_CraftSlotAt(struct InventoryScreen* s, int x, int y) {
+	int slot = s->craftSlot;
+	int i, sx, sy;
+
+	for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
+		sx = s->craftX + (i & 1) * slot;
+		sy = s->craftY + (i >> 1) * slot;
+		if (Gui_Contains(sx, sy, slot, slot, x, y)) return i;
+	}
+	if (Gui_Contains(s->craftOutX, s->craftOutY, slot, slot, x, y)) return INVENTORY_CRAFTING_GRID;
+	return -1;
+}
+
+static void InventoryScreen_ClearHeld(struct InventoryScreen* s) {
+	s->heldBlock = BLOCK_AIR;
+	s->heldCount = 0;
+}
+
+static cc_bool InventoryScreen_CanHold(struct InventoryScreen* s, BlockID block, int count) {
+	if (block == BLOCK_AIR || count <= 0) return true;
+	if (s->heldBlock == BLOCK_AIR) return count <= INVENTORY_MAX_STACK;
+	return s->heldBlock == block && s->heldCount + count <= INVENTORY_MAX_STACK;
+}
+
+static void InventoryScreen_AddHeld(struct InventoryScreen* s, BlockID block, int count) {
+	if (block == BLOCK_AIR || count <= 0) return;
+	if (s->heldBlock == BLOCK_AIR) {
+		s->heldBlock = block;
+		s->heldCount = 0;
+	}
+	s->heldCount += (cc_uint8)count;
+}
+
+static void InventoryScreen_ChangedSlots(struct InventoryScreen* s) {
+	TableWidget_RecreateBlocks(&s->table);
+	Inventory_UpdateCrafting();
+	Event_RaiseVoid(&UserEvents.HeldBlockChanged);
+	s->dirty = true;
+}
+
+static cc_bool InventoryScreen_MoveCraftToHeld(struct InventoryScreen* s, int slot, int amount) {
+	BlockID block = Inventory.Craft[slot];
+	if (block == BLOCK_AIR || !Inventory.CraftCounts[slot]) return true;
+	amount = min(amount, Inventory.CraftCounts[slot]);
+	if (!InventoryScreen_CanHold(s, block, amount)) return false;
+
+	InventoryScreen_AddHeld(s, block, amount);
+	Inventory.CraftCounts[slot] -= (cc_uint8)amount;
+	if (!Inventory.CraftCounts[slot]) Inventory.Craft[slot] = BLOCK_AIR;
+	InventoryScreen_ChangedSlots(s);
+	return true;
+}
+
+static cc_bool InventoryScreen_PlaceHeldInCraft(struct InventoryScreen* s, int slot, int amount) {
+	if (s->heldBlock == BLOCK_AIR || !s->heldCount) return true;
+	if (Inventory.Craft[slot] != BLOCK_AIR && Inventory.Craft[slot] != s->heldBlock) return false;
+	if (Inventory.CraftCounts[slot] >= INVENTORY_MAX_STACK) return false;
+
+	amount = min(amount, s->heldCount);
+	amount = min(amount, INVENTORY_MAX_STACK - Inventory.CraftCounts[slot]);
+	Inventory.Craft[slot] = s->heldBlock;
+	Inventory.CraftCounts[slot] += (cc_uint8)amount;
+	s->heldCount -= (cc_uint8)amount;
+	if (!s->heldCount) InventoryScreen_ClearHeld(s);
+	InventoryScreen_ChangedSlots(s);
+	return true;
+}
+
+static void InventoryScreen_ConsumeRecipeInputs(void) {
+	int i;
+	for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
+		if (!Inventory.CraftCounts[i]) continue;
+		Inventory.CraftCounts[i]--;
+		if (!Inventory.CraftCounts[i]) Inventory.Craft[i] = BLOCK_AIR;
+	}
+	Inventory_UpdateCrafting();
+}
+
+static cc_bool InventoryScreen_HandleCraftClick(struct InventoryScreen* s, int x, int y, cc_bool right) {
+	int slot = InventoryScreen_CraftSlotAt(s, x, y);
+	cc_bool doubleClick;
+	if (!Game_SurvivalMode || slot < 0) return false;
+
+	if (slot == INVENTORY_CRAFTING_GRID) {
+		if (InventoryScreen_CanHold(s, Inventory.CraftResult, Inventory.CraftResultCount)) {
+			if (Inventory.CraftResult != BLOCK_AIR && Inventory.CraftResultCount) {
+				InventoryScreen_AddHeld(s, Inventory.CraftResult, Inventory.CraftResultCount);
+				InventoryScreen_ConsumeRecipeInputs();
+				InventoryScreen_ChangedSlots(s);
+			}
+		}
+		s->lastCraftSlot = -1;
+		return true;
+	}
+
+	doubleClick =
+		s->lastCraftSlot == slot &&
+		s->lastCraftClick > 0.0 &&
+		Game.Time - s->lastCraftClick <= 0.35;
+	if (doubleClick && Inventory.Craft[slot] != BLOCK_AIR && Inventory.CraftCounts[slot]) {
+		if (!Inventory_TryAddCount(Inventory.Craft[slot], Inventory.CraftCounts[slot])) return true;
+		Inventory.Craft[slot] = BLOCK_AIR;
+		Inventory.CraftCounts[slot] = 0;
+		Inventory_UpdateCrafting();
+		s->lastCraftSlot = -1;
+		s->dirty = true;
+		return true;
+	}
+
+	s->lastCraftSlot  = slot;
+	s->lastCraftClick = Game.Time;
+
+	if (s->heldBlock == BLOCK_AIR) {
+		if (Inventory.Craft[slot] != BLOCK_AIR && Inventory.CraftCounts[slot]) {
+			InventoryScreen_MoveCraftToHeld(s, slot, right ? (Inventory.CraftCounts[slot] + 1) / 2 : Inventory.CraftCounts[slot]);
+		}
+	} else {
+		InventoryScreen_PlaceHeldInCraft(s, slot, right ? 1 : s->heldCount);
+	}
+	return true;
+}
+
+static void InventoryScreen_SwapHeldWithRaw(struct InventoryScreen* s, int raw) {
+	BlockID block = Inventory.Table[raw];
+	cc_uint8 count = Inventory.Counts[raw];
+
+	Inventory.Table[raw]  = s->heldBlock;
+	Inventory.Counts[raw] = s->heldCount;
+	s->heldBlock = block;
+	s->heldCount = count;
+	if (!s->heldCount) s->heldBlock = BLOCK_AIR;
+}
+
+static void InventoryScreen_QuickMoveRaw(struct InventoryScreen* s, int raw) {
+	BlockID block = Inventory.Table[raw];
+	int start = raw < INVENTORY_BLOCKS_PER_HOTBAR ? INVENTORY_BLOCKS_PER_HOTBAR : 0;
+	int end   = raw < INVENTORY_BLOCKS_PER_HOTBAR ? INVENTORY_SURVIVAL_SLOTS : INVENTORY_BLOCKS_PER_HOTBAR;
+	int i, added, count = Inventory.Counts[raw];
+
+	if (block == BLOCK_AIR || !count) return;
+	for (i = start; i < end && count; i++) {
+		if (Inventory.Table[i] != block) continue;
+		added = Inventory_AddToRawSlot(i, block, count);
+		count -= added;
+	}
+	for (i = start; i < end && count; i++) {
+		if (Inventory.Table[i] != BLOCK_AIR) continue;
+		added = Inventory_AddToRawSlot(i, block, count);
+		count -= added;
+	}
+
+	Inventory_SetRawSlot(raw, block, count);
+	InventoryScreen_ChangedSlots(s);
+}
+
+static cc_bool InventoryScreen_HandleRawClick(struct InventoryScreen* s, int x, int y, cc_bool right) {
+	struct TableWidget* table = &s->table;
+	int index = TableWidget_IndexAt(table, x, y);
+	int raw, amount, added;
+	BlockID block;
+
+	if (!Game_SurvivalMode || index < 0) return false;
+	raw = table->blockRawSlots[index];
+	if (raw < 0 || raw >= INVENTORY_SURVIVAL_SLOTS) return true;
+
+	block = Inventory.Table[raw];
+	if (!right && s->heldBlock == BLOCK_AIR && Input_IsShiftPressed()) {
+		InventoryScreen_QuickMoveRaw(s, raw);
+		table->selectedIndex = index;
+		TableWidget_RecreateTitle(table, true);
+		return true;
+	}
+	if (right) {
+		if (s->heldBlock == BLOCK_AIR) {
+			if (block == BLOCK_AIR || !Inventory.Counts[raw]) return true;
+			amount = (Inventory.Counts[raw] + 1) / 2;
+			s->heldBlock = block;
+			s->heldCount = (cc_uint8)amount;
+			Inventory.Counts[raw] -= (cc_uint8)amount;
+			if (!Inventory.Counts[raw]) Inventory.Table[raw] = BLOCK_AIR;
+		} else {
+			if (!Inventory_CanAddToRawSlot(raw, s->heldBlock)) return true;
+			added = Inventory_AddToRawSlot(raw, s->heldBlock, 1);
+			s->heldCount -= (cc_uint8)added;
+			if (!s->heldCount) InventoryScreen_ClearHeld(s);
+		}
+	} else {
+		if (s->heldBlock == BLOCK_AIR) {
+			s->heldBlock = block;
+			s->heldCount = Inventory.Counts[raw];
+			Inventory_SetRawSlot(raw, BLOCK_AIR, 0);
+		} else if (Inventory_CanAddToRawSlot(raw, s->heldBlock)) {
+			added = Inventory_AddToRawSlot(raw, s->heldBlock, s->heldCount);
+			s->heldCount -= (cc_uint8)added;
+			if (!s->heldCount) InventoryScreen_ClearHeld(s);
+		} else {
+			InventoryScreen_SwapHeldWithRaw(s, raw);
+		}
+	}
+
+	InventoryScreen_ChangedSlots(s);
+	table->selectedIndex = index;
+	TableWidget_RecreateTitle(table, true);
+	return true;
+}
+
+static cc_bool InventoryScreen_HandleSurvivalClick(struct InventoryScreen* s, int x, int y, cc_bool right) {
+	if (InventoryScreen_HandleCraftClick(s, x, y, right)) return true;
+	if (InventoryScreen_HandleRawClick(s, x, y, right)) return true;
+	return false;
+}
+
 static int InventoryScreen_PointerDown(void* screen, int id, int x, int y) {
 	struct InventoryScreen* s = (struct InventoryScreen*)screen;
 	struct TableWidget* table = &s->table;
 	cc_bool handled, hotbar;
 
+	if (InventoryScreen_HandleSurvivalClick(s, x, y, false)) return TOUCH_TYPE_GUI;
 	if (table->scroll.draggingId == id) return TOUCH_TYPE_GUI;
 	if (HUDscreen_PointerDown(Gui_HUD, id, x, y)) return TOUCH_TYPE_GUI;
 	handled = Elem_HandlesPointerDown(table, id, x, y);
@@ -1935,7 +2386,7 @@ static int InventoryScreen_PadAxis(void* screen, struct PadAxisUpdate* upd) {
 
 static const struct ScreenVTABLE InventoryScreen_VTABLE = {
 	InventoryScreen_Init,        InventoryScreen_Update,    InventoryScreen_Free,
-	InventoryScreen_Render,      Screen_BuildMesh,
+	InventoryScreen_Render,      InventoryScreen_BuildMesh,
 	InventoryScreen_KeyDown,     InventoryScreen_KeyUp,     Screen_TKeyPress,            Screen_TText,
 	InventoryScreen_PointerDown, InventoryScreen_PointerUp, InventoryScreen_PointerMove, InventoryScreen_MouseScroll,
 	InventoryScreen_Layout,  InventoryScreen_ContextLost, InventoryScreen_ContextRecreated,

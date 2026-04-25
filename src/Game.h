@@ -25,6 +25,8 @@ CC_VAR extern struct _GameData {
 
 extern struct RayTracer Game_SelectedPos;
 extern cc_bool Game_UseCPEBlocks, Game_Running;
+extern cc_bool Game_ShowMainMenu;
+extern cc_bool Game_SurvivalMode;
 
 extern cc_string Game_Username;
 extern cc_string Game_Mppass;

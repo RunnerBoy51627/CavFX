@@ -292,16 +292,17 @@ void Model_RenderArm(struct Model* model, struct Entity* e) {
 	Model_SetupState(model, e);
 	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	Model_ApplyTexture(e);
-
+	/*
 	if (Models.ClassicArms) {
-		/* TODO: Position's not quite right. */
-		/* Matrix_Translate(out m, -armX / 16f + 0.2f, -armY / 16f - 0.20f, 0); */
-		/* is better, but that breaks the dig animation */
+		// TODO: Position's not quite right.
+		// Matrix_Translate(out m, -armX / 16f + 0.2f, -armY / 16f - 0.20f, 0);
+		// is better, but that breaks the dig animation
 		Matrix_Translate(&translate, -model->armX / 16.0f,         -model->armY / 16.0f - 0.10f, 0);
 	} else {
 		Matrix_Translate(&translate, -model->armX / 16.0f + 0.10f, -model->armY / 16.0f - 0.26f, 0);
 	}
-
+	*/
+	Matrix_Translate(&translate, -model->armX / 16.0f + 0.10f, -model->armY / 16.0f - 0.26f, 0);
 	Entity_GetTransform(e, pos, e->ModelScale, &m);
 	Matrix_Mul(&m, &m,         &Gfx.View);
 	Matrix_Mul(&m, &translate, &m);
@@ -318,12 +319,14 @@ void Model_DrawArmPart(struct ModelPart* part) {
 	struct ModelPart arm = *part;
 	arm.rotX = model->armX / 16.0f; 
 	arm.rotY = (model->armY + model->armY / 2) / 16.0f;
-
+	/*
 	if (Models.ClassicArms) {
 		Model_DrawRotate(0, -90 * MATH_DEG2RAD, 120 * MATH_DEG2RAD, &arm, false);
 	} else {
 		Model_DrawRotate(-20 * MATH_DEG2RAD, -70 * MATH_DEG2RAD, 135 * MATH_DEG2RAD, &arm, false);
 	}
+	*/
+	Model_DrawRotate(-25 * MATH_DEG2RAD, -65 * MATH_DEG2RAD, 125 * MATH_DEG2RAD, &arm, false);
 }
 
 

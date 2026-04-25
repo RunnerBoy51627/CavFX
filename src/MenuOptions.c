@@ -625,10 +625,6 @@ static void ClassicOptionsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 			ClO_GetViewBob,  ClO_SetViewBob, NULL);
 		MenuOptionsScreen_AddBool(s, "Limit framerate",
 			ClO_GetFPS,      ClO_SetFPS, NULL);
-		if (Game_ClassicHacks) {
-			MenuOptionsScreen_AddBool(s, "Hacks enabled",
-				ClO_GetHacks,ClO_SetHacks, NULL);
-		}
 	}
 	MenuOptionsScreen_EndButtons(s, 4, Menu_SwitchPause);
 	s->DoRecreateExtra = ClassicOptionsScreen_RecreateExtra;

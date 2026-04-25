@@ -1,3 +1,4 @@
+CavFX is a extended version of ClassiCube that restores lost features.
 ClassiCube is a custom Minecraft Classic compatible client written in C from scratch.<br>
 
 You can **download ClassiCube** [here](https://www.classicube.net/download/) and the very latest builds [here](https://www.classicube.net/nightlies/).
@@ -5,7 +6,7 @@ You can **download ClassiCube** [here](https://www.classicube.net/download/) and
 > [!IMPORTANT]
 **ClassiCube is not affiliated with (or supported by) Mojang AB, Minecraft, or Microsoft in any way.** <br><br>
 **ClassiCube is not trying to replicate modern Minecraft.**<br>
-**It will never support survival, Minecraft accounts, or modern Minecraft servers.**
+**It will support survival.**
 
 # What ClassiCube is
 

@@ -20,6 +20,23 @@ static cc_bool held_animating, held_breaking, held_swinging;
 static float held_swingY;
 static float held_time, held_period = 0.25f;
 static BlockID held_lastBlock;
+static cc_bool held_swayInit;
+static float held_lastYaw, held_lastPitch;
+static float held_swayX, held_swayY;
+
+static float ClampFloat(float value, float min, float max) {
+	if (value < min) return min;
+	if (value > max) return max;
+	return value;
+}
+
+static float AngleDelta(float current, float last) {
+	float delta = current - last;
+
+	if (delta > 180.0f)  delta -= 360.0f;
+	if (delta < -180.0f) delta += 360.0f;
+	return delta;
+}
 
 /* Since not using Entity_SetModel, which normally automatically does this */
 static void SetHeldModel(struct Model* model) {
@@ -104,6 +121,36 @@ static void SetBaseOffset(void) {
 		float height = Blocks.MaxBB[held_block].y - Blocks.MinBB[held_block].y;
 		held_entity.Position.y += 0.2f * (1.0f - height);
 	}
+}
+
+static void ApplyHandSway(float delta) {
+	struct Entity* p = &Entities.CurPlayer->Base;
+	float yawDelta, pitchDelta;
+	float targetX, targetY, lerp;
+
+	if (!held_swayInit) {
+		held_lastYaw   = p->Yaw;
+		held_lastPitch = p->Pitch;
+		held_swayInit  = true;
+	}
+
+	yawDelta   = AngleDelta(p->Yaw,   held_lastYaw);
+	pitchDelta = AngleDelta(p->Pitch, held_lastPitch);
+	held_lastYaw   = p->Yaw;
+	held_lastPitch = p->Pitch;
+
+	targetX = ClampFloat(-yawDelta   * 0.035f, -0.10f, 0.10f);
+	targetY = ClampFloat( pitchDelta * 0.030f, -0.08f, 0.08f);
+	lerp    = ClampFloat(delta * 14.0f, 0.0f, 1.0f);
+
+	held_swayX = Math_Lerp(held_swayX, targetX, lerp);
+	held_swayY = Math_Lerp(held_swayY, targetY, lerp);
+
+	held_entity.Position.x += held_swayX;
+	held_entity.Position.y += held_swayY;
+	held_entity.RotY       += held_swayX * 180.0f;
+	held_entity.Yaw        += held_swayX * 80.0f;
+	held_entity.RotX       += held_swayY * 165.0f;
 }
 
 static void OnProjectionChanged(void* obj) {
@@ -234,6 +281,7 @@ void HeldBlockRenderer_Render(float delta) {
 
 	ResetHeldState();
 	DoAnimation(delta, lastSwingY);
+	ApplyHandSway(delta);
 	SetBaseOffset();
 	if (!Camera.Active->isThirdPerson) HeldBlockRenderer_RenderModel();
 

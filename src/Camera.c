@@ -302,7 +302,7 @@ static void OnAxisUpdate(void* obj, struct PadAxisUpdate* upd) {
 static void OnHacksChanged(void* obj) {
 	struct HacksComp* h = &Entities.CurPlayer->Hacks;
 	/* Leave third person if not allowed anymore */
-	if (!h->CanUseThirdPerson || !h->Enabled) Camera_CycleActive();
+	if (!h->CanUseThirdPerson || (!h->Enabled && !Game_SurvivalMode)) Camera_CycleActive();
 }
 
 void Camera_CycleActive(void) {
@@ -312,7 +312,7 @@ void Camera_CycleActive(void) {
 	if (Game_ClassicMode) return;
 	Camera.Active = Camera.Active->next;
 
-	if (!p->Hacks.CanUseThirdPerson || !p->Hacks.Enabled) {
+	if (!p->Hacks.CanUseThirdPerson || (!p->Hacks.Enabled && !Game_SurvivalMode)) {
 		Camera.Active = &cam_FirstPerson;
 	}
 	cam_isForwardThird = Camera.Active == &cam_ForwardThird;

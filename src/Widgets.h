@@ -73,6 +73,9 @@ struct HotbarWidget {
 	float scrollAcc, scale;
 	cc_bool altHandled;
 	struct Texture ellipsisTex;
+	struct FontDesc* countFont;
+	struct Texture countTex[INVENTORY_BLOCKS_PER_HOTBAR];
+	int countTexValue[INVENTORY_BLOCKS_PER_HOTBAR];
 	int state[HOTBAR_CORE_VERTICES / 4];
 	int verticesCount;
 	int touchId[HOTBAR_MAX_INDEX];
@@ -99,10 +102,14 @@ struct TableWidget {
 	float scale;
 
 	BlockID blocks[BLOCK_COUNT];
+	int blockRawSlots[BLOCK_COUNT];
 	struct ScrollbarWidget scroll;
 	int lastX, lastY, paddingX;
 	int paddingL, paddingR, paddingT, paddingB;
-	void (*UpdateTitle)(BlockID block);
+	struct FontDesc* countFont;
+	struct Texture countTex[INVENTORY_SURVIVAL_SLOTS];
+	int countTexValue[INVENTORY_SURVIVAL_SLOTS];
+	void (*UpdateTitle)(BlockID block, int count);
 
 	int state[TABLE_MAX_VERTICES / 4];
 	int verticesCount;
@@ -119,6 +126,7 @@ CC_NOINLINE void TableWidget_OnInventoryChanged(struct TableWidget* w);
 CC_NOINLINE void TableWidget_RecreateTitle(struct TableWidget* w, cc_bool force);
 /* Like RecreateTitle, but the block's title to be shown can be changed from the currently selected index. Pass -1 to use the currently selected index. */
 CC_NOINLINE void TableWidget_RecreateTitleForBlock(struct TableWidget* w, cc_bool force, int blockForTitle);
+CC_NOINLINE int TableWidget_IndexAt(struct TableWidget* w, int x, int y);
 
 
 #define INPUTWIDGET_MAX_LINES 3

@@ -45,6 +45,8 @@
 struct _GameData Game;
 static cc_uint64 frameStart;
 cc_bool Game_UseCPEBlocks, Game_Running;
+cc_bool Game_ShowMainMenu;
+cc_bool Game_SurvivalMode;
 
 struct RayTracer Game_SelectedPos;
 int Game_ViewDistance     = DEFAULT_VIEWDIST;
@@ -360,7 +362,8 @@ static void Game_WarnFunc(const cc_string* msg) {
 
 static void LoadOptions(void) {
 	Game_ClassicMode  = Options_GetBool(OPT_CLASSIC_MODE,  false);
-	Game_ClassicHacks = Options_GetBool(OPT_CLASSIC_HACKS, false);
+	Game_ClassicHacks = Options_GetBool(OPT_CLASSIC_HACKS, true);
+	Game_SurvivalMode = Options_GetBool(OPT_SURVIVAL_MODE, true);
 	Game_Anaglyph3D   = Options_GetBool(OPT_ANAGLYPH3D,    false);
 #if defined CC_BUILD_PS1 || defined CC_BUILD_SATURN
 	/* View bobbing requires per-frame matrix multiplications - costly on FPU less systems */
@@ -495,7 +498,7 @@ static void Game_Load(void) {
 	TexturePack_ExtractCurrent(true);
 	if (TexturePack_DefaultMissing) {
 		Window_ShowDialog("Missing file",
-			"Both default.zip and classicube.zip are missing,\n try downloading resources first.\n\nClassiCube will still run, but without any textures.");
+			"Both default.zip and classicube.zip are missing,\n try downloading resources first.\n\nCavFX will still run, but without any textures.");
 	}
 	Gfx_WarnIfNecessary();
 

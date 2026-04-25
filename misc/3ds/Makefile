@@ -16,6 +16,8 @@ SOURCE_DIRS	= src src/3ds third_party/bearssl
 SHDR_DIRS   = misc/3ds
 # Directory where object files are placed
 BUILD_DIR	= build/3ds
+PRELOAD_DIR = src/preload
+PRELOAD_ROOT = $(BUILD_DIR)/sdroot/3ds/ClassiCube
 
 APP_ICON	= misc/3ds/icon.png
 APP_TITLE 	= ClassiCube
@@ -75,13 +77,16 @@ BIN2S	 := $(DEVKITPRO)/tools/bin/bin2s
 #---------------------------------------------------------------------------------
 # Main targets
 #---------------------------------------------------------------------------------
-default: $(BUILD_DIR) $(TARGET).cia
+default: $(BUILD_DIR) $(TARGET).cia copy-preload
 
 clean:
 	rm $(TARGET).cia $(TARGET).3dsx $(TARGET).elf $(OBJS)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+copy-preload:
+	if [ -d "$(PRELOAD_DIR)" ]; then mkdir -p "$(PRELOAD_ROOT)" && cp -r "$(PRELOAD_DIR)"/* "$(PRELOAD_ROOT)"/ 2>/dev/null || true; fi
 
 
 #---------------------------------------------------------------------------------

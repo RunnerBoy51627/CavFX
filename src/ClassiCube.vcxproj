@@ -39,6 +39,7 @@
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>ClassiCube</RootNamespace>
     <WindowsTargetPlatformVersion>$(SDKVersion)</WindowsTargetPlatformVersion>
+    <ProjectName>CavFX</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -664,6 +665,12 @@
     <ResourceCompile Include="..\misc\windows\CCicon.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="CopyPreloadFiles" AfterTargets="Build" Condition="Exists('$(ProjectDir)preload')">
+    <ItemGroup>
+      <PreloadFiles Include="$(ProjectDir)preload\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PreloadFiles)" DestinationFiles="@(PreloadFiles->'$(TargetDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>
