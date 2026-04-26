@@ -585,6 +585,8 @@ void Gfx_ClearBuffers(GfxBuffers buffers) {
 	if (buffers & GFX_BUFFER_DEPTH) targets |= C3D_CLEAR_DEPTH;
 	
 	C3D_RenderTargetClear(&topTargetLeft, targets, clear_color, 0);
+	C3D_RenderTargetClear(&bottomTarget, targets, clear_color, 0);
+	if (rendering3D) C3D_RenderTargetClear(&topTargetRight, targets, clear_color, 0);
 }
 
 void Gfx_EndFrame(void) {

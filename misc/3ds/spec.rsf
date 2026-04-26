@@ -2,14 +2,14 @@
 # https://gist.github.com/jakcron/9f9f02ffd94d98a72632
 
 BasicInfo:
-  Title                   : ClassiCube
+  Title                   : CavFX
   CompanyCode             : "00"
-  ProductCode             : CCBE
+  ProductCode             : CFXE
   ContentType             : Application
   Logo                    : Nintendo
 
 TitleInfo:
-  UniqueId                : 0x00CCBE
+  UniqueId                : 0x00CFXE
   Category                : Application
   
 CardInfo:

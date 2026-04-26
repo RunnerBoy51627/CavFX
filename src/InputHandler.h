@@ -49,6 +49,7 @@ void StoredHotkeys_Remove(int trigger, cc_uint8 modifiers);
 void StoredHotkeys_Add(int trigger, cc_uint8 modifiers, cc_bool moreInput, const cc_string* text);
 
 cc_bool InputHandler_SetFOV(int fov);
+float InputHandler_GetMiningProgress(void);
 cc_bool Input_HandleMouseWheel(float delta);
 void InputHandler_Tick(float delta);
 void InputHandler_OnScreensChanged(void);

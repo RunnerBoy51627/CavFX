@@ -40,7 +40,7 @@ static const cc_uint8 v4_hotbar[INVENTORY_BLOCKS_PER_HOTBAR] = {
 };
 
 static const struct GameVersion version_cpe  = { 
-	"CavFX Pre-Release 0.01 (Minecraft 0.30)",     true, VERSION_CPE, 
+	""GAME_APP_NAME" (ClassiCube 1.3.8)",     true, VERSION_CPE,
 	PROTOCOL_0030, BLOCK_MAX_CPE, 
 	10, sizeof(v7_inventory), NULL,         v7_hotbar,
 	"texpacks/default.zip"

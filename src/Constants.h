@@ -6,16 +6,16 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 */
 
 #define GAME_MAX_CMDARGS 5
-#define GAME_APP_VER "1.3.8"
+#define GAME_APP_VER "0.0.1"
 #define GAME_API_VER 1
 
 #if defined CC_BUILD_WEB
-#define GAME_APP_ALT   "ClassiCube 1.3.8 web mobile"
-#define GAME_APP_NAME  "ClassiCube 1.3.8 web"
-#define GAME_APP_TITLE "ClassiCube"
+#define GAME_APP_ALT   "CavFX " GAME_APP_VER " web mobile"
+#define GAME_APP_NAME  "CavFX " GAME_APP_VER " web"
+#define GAME_APP_TITLE "CavFX"
 #else
-#define GAME_APP_NAME  "ClassiCube 1.3.8"
-#define GAME_APP_TITLE "ClassiCube 1.3.8"
+#define GAME_APP_NAME  "CavFX " GAME_APP_VER
+#define GAME_APP_TITLE "CavFX " GAME_APP_VER
 #endif
 
 /* Max number of characters strings can have. */
@@ -74,5 +74,5 @@ enum SKIN_TYPE { SKIN_64x32, SKIN_64x64, SKIN_64x64_SLIM, SKIN_INVALID = 0xF0 };
 /* Webpage where users can register for a new account */
 #define REGISTERNEW_URL "https://www.classicube.net/acc/register/"
 
-#define DEFAULT_USERNAME "Singleplayer"
+#define DEFAULT_USERNAME "SteveFX"
 #endif

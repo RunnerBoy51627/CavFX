@@ -38,6 +38,7 @@
 #include "InputHandler.h"
 #include "Protocol.h"
 #include "Entity.h"
+#include "Constants.h"
 
 /*########################################################################################################################*
 *--------------------------------------------------------Menu base--------------------------------------------------------*
@@ -520,16 +521,68 @@ static struct MainMenuScreen {
 	Screen_Body
 		struct FontDesc titleFont, textFont;
 	struct TextWidget title;
-	struct ButtonWidget create, load, join, mode, quit;
-	struct Widget* __widgets[6];
+	struct ButtonWidget create, load, join, mode, username, quit;
+	struct Widget* __widgets[7];
 } MainMenuScreen;
 
 static cc_bool MainMenu_Creative = true;
 static struct MenuInputDesc MainMenu_LanInput;
+static struct MenuInputDesc MainMenu_UsernameInput;
 static cc_string MainMenu_LanDefault = String_FromConst("127.0.0.1:25565");
+static cc_bool MainMenu_AskedUsername;
 
 static void MainMenuScreen_UpdateMode(struct MainMenuScreen* s) {
 	ButtonWidget_SetConst(&s->mode, MainMenu_Creative ? "Gamemode: Creative" : "Gamemode: Survival", &s->titleFont);
+}
+
+static void MainMenuScreen_UpdateUsername(struct MainMenuScreen* s) {
+	cc_string text; char textBuffer[STRING_SIZE + 16];
+	String_InitArray(text, textBuffer);
+	String_AppendConst(&text, "Username: ");
+	String_AppendString(&text, &Game_Username);
+	ButtonWidget_Set(&s->username, &text, &s->titleFont);
+}
+
+static void MainMenuScreen_SetUsername(const cc_string* value) {
+	struct Entity* local = &Entities.CurPlayer->Base;
+	cc_string title;
+	cc_string oldName, skin;
+	char titleBuffer[STRING_SIZE];
+	char oldBuffer[STRING_SIZE];
+
+	if (!value->length) return;
+	String_InitArray(oldName, oldBuffer);
+	String_Copy(&oldName, &Game_Username);
+
+	Game_Username.length = 0;
+	String_AppendString(&Game_Username, value);
+	String_UNSAFE_TrimEnd(&Game_Username);
+	if (!Game_Username.length) {
+		String_AppendConst(&Game_Username, DEFAULT_USERNAME);
+	}
+
+	Options_Set(LOPT_USERNAME, &Game_Username);
+	Entity_SetName(local, &Game_Username);
+	String_InitArray(title, titleBuffer);
+	String_Format2(&title, "%c (%s)", GAME_APP_TITLE, &Game_Username);
+	Window_SetTitle(&title);
+
+	skin = String_FromRawArray(local->SkinRaw);
+	if (!skin.length || String_Equals(&skin, &oldName)) {
+		Entity_SetSkin(local, &Game_Username);
+	}
+}
+
+static void MainMenuScreen_UsernameDone(const cc_string* value, cc_bool valid) {
+	if (!valid) return;
+	MainMenuScreen_SetUsername(value);
+	MainMenuScreen_UpdateUsername(&MainMenuScreen);
+	MainMenuScreen.dirty = true;
+}
+
+static void MainMenuScreen_Username(void* screen, void* widget) {
+	MenuInput_String(MainMenu_UsernameInput);
+	MenuInputOverlay_Show(&MainMenu_UsernameInput, &Game_Username, MainMenuScreen_UsernameDone, true);
 }
 
 static void MainMenuScreen_ApplyMode(void) {
@@ -635,6 +688,7 @@ static void MainMenuScreen_ContextRecreated(void* screen) {
 	ButtonWidget_SetConst(&s->create, "Create world...", &s->titleFont);
 	ButtonWidget_SetConst(&s->load, "Load world...", &s->titleFont);
 	ButtonWidget_SetConst(&s->join, "Join LAN...", &s->titleFont);
+	MainMenuScreen_UpdateUsername(s);
 	//MainMenuScreen_UpdateMode(s);
 	ButtonWidget_SetConst(&s->quit, "Quit", &s->titleFont);
 }
@@ -646,6 +700,7 @@ static void MainMenuScreen_Layout(void* screen) {
 	Widget_SetLocation(&s->load, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -35);
 	Widget_SetLocation(&s->join, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 10);
 	//Widget_SetLocation(&s->mode, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 55);
+	Widget_SetLocation(&s->username, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 55);
 	Widget_SetLocation(&s->quit, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 100);
 }
 
@@ -661,7 +716,7 @@ static void MainMenuScreen_Init(void* screen) {
 	ButtonWidget_Add(s, &s->create, 300, MainMenuScreen_Create);
 	ButtonWidget_Add(s, &s->load, 300, MainMenuScreen_Load);
 	ButtonWidget_Add(s, &s->join, 300, MainMenuScreen_Join);
-	ButtonWidget_Add(s, &s->mode, 300, MainMenuScreen_Mode);
+	ButtonWidget_Add(s, &s->username, 300, MainMenuScreen_Username);
 	ButtonWidget_Add(s, &s->quit, 300, MainMenuScreen_Quit);
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
@@ -678,6 +733,7 @@ static const struct ScreenVTABLE MainMenuScreen_VTABLE = {
 
 void MainMenuScreen_Show(void) {
 	struct MainMenuScreen* s = &MainMenuScreen;
+	cc_string savedName;
 	Game_ShowMainMenu = true;
 	LoadLevelScreen_FromMainMenu = false;
 	MainMenu_Creative = !Game_SurvivalMode;
@@ -686,6 +742,12 @@ void MainMenuScreen_Show(void) {
 	s->closable = false;
 	s->VTABLE = &MainMenuScreen_VTABLE;
 	Gui_Add((struct Screen*)s, GUI_PRIORITY_MENU);
+
+	if (!MainMenu_AskedUsername && !Options_UNSAFE_Get(LOPT_USERNAME, &savedName)) {
+		MainMenu_AskedUsername = true;
+		MenuInput_String(MainMenu_UsernameInput);
+		MenuInputOverlay_Show(&MainMenu_UsernameInput, &Game_Username, MainMenuScreen_UsernameDone, true);
+	}
 }
 
 static int MainMenuScreen_KeyDown(void* screen, int key, struct InputDevice* device) {
@@ -703,14 +765,14 @@ static struct CreateWorldScreen {
 	Screen_Body
 		struct FontDesc titleFont, textFont;
 	struct TextWidget title, nameLabel, saveLabel, desc, seedLabel, seedHelp, structHelp;
-	struct TextInputWidget nameInput, seedInput;
-	struct ButtonWidget mode, more, structures, worldType, done, create, cancel;
+	struct TextInputWidget nameText, seedText;
+	struct ButtonWidget mode, structures, worldType, create, cancel;
 	struct Widget* __widgets[24];
 
-	cc_bool optionsPage;
 	cc_bool creativeMode;
 	cc_bool structuresOn;
 	int worldSize;
+	int selectedInput; /* 0 = name, 1 = seed */
 } CreateWorldScreen;
 
 static void CreateWorldScreen_UpdateModeText(struct CreateWorldScreen* s) {
@@ -720,8 +782,8 @@ static void CreateWorldScreen_UpdateModeText(struct CreateWorldScreen* s) {
 
 	TextWidget_SetConst(&s->desc,
 		s->creativeMode ?
-		"Unlimited resources, flying and destroy blocks instantly" :
-		"Search for resources, crafting, gain levels, health and stamina",
+		"Unlimited resources." :
+		"Search for resources.",
 		&s->textFont);
 }
 
@@ -748,22 +810,8 @@ static void CreateWorldScreen_Structures(void* screen, void* widget) {
 
 static void CreateWorldScreen_Layout(void* screen);
 
-static int CreateWorldScreen_KeyPress(void* screen, char keyChar);
-static int CreateWorldScreen_TextChanged(void* screen, const cc_string* str);
-
-static void CreateWorldScreen_More(void* screen, void* widget) {
-	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
-	s->optionsPage = true;
-	CreateWorldScreen_Layout(screen);
-	s->dirty = true;
-}
-
-static void CreateWorldScreen_Done(void* screen, void* widget) {
-	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
-	s->optionsPage = false;
-	CreateWorldScreen_Layout(screen);
-	s->dirty = true;
-}
+//static int CreateWorldScreen_KeyPress(void* screen, char keyChar);
+//static int CreateWorldScreen_TextChanged(void* screen, const cc_string* str);
 
 static void CreateWorldScreen_Create(void* screen, void* widget) {
 	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
@@ -806,8 +854,10 @@ static void CreateWorldScreen_ContextRecreated(void* screen) {
 	MenuInput_String(nameDesc);
 	MenuInput_String(seedDesc);
 
-	TextInputWidget_SetFont(&s->nameInput, &s->titleFont);
-	TextInputWidget_SetFont(&s->seedInput, &s->titleFont);
+	TextInputWidget_Create(&s->nameText, 420, &nameDefault, &nameDesc);
+	TextInputWidget_Create(&s->seedText, 420, &seedDefault, &seedDesc);
+	TextInputWidget_SetFont(&s->nameText, &s->titleFont);
+	TextInputWidget_SetFont(&s->seedText, &s->titleFont);
 
 	TextWidget_SetConst(&s->title, "Create New World", &s->titleFont);
 	TextWidget_SetConst(&s->nameLabel, "World Name", &s->textFont);
@@ -820,82 +870,38 @@ static void CreateWorldScreen_ContextRecreated(void* screen) {
 	CreateWorldScreen_UpdateModeText(s);
 	CreateWorldScreen_UpdateOptionsText(s);
 
-	ButtonWidget_SetConst(&s->more, "More World Options...", &s->titleFont);
-	ButtonWidget_SetConst(&s->done, "Done", &s->titleFont);
 	ButtonWidget_SetConst(&s->create, "Create New World", &s->titleFont);
 	ButtonWidget_SetConst(&s->cancel, "Cancel", &s->titleFont);
-
-	if (!s->nameInput.base.text.length)
-		InputWidget_SetText(&s->nameInput.base, &nameDefault);
-	if (!s->seedInput.base.text.length)
-		InputWidget_SetText(&s->seedInput.base, &seedDefault);
 }
 
 static void CreateWorldScreen_Layout(void* screen) {
 	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
 
-	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -230);
+	int leftX = -230;
+	int rightX = 230;
 
-	if (!s->optionsPage) {
-		Widget_SetLocation(&s->nameLabel, ANCHOR_CENTRE, ANCHOR_CENTRE, -190, -150);
-		Widget_SetLocation(&s->nameInput.base, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -105);
-		Widget_SetLocation(&s->saveLabel, ANCHOR_CENTRE, ANCHOR_CENTRE, -120, -60);
+	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -240);
 
-		Widget_SetLocation(&s->mode, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 0);
-		Widget_SetLocation(&s->desc, ANCHOR_CENTRE, ANCHOR_CENTRE, -60, 55);
-		Widget_SetLocation(&s->more, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 150);
-	}
-	else {
-		Widget_SetLocation(&s->seedLabel, ANCHOR_CENTRE, ANCHOR_CENTRE, -105, -150);
-		Widget_SetLocation(&s->seedInput.base, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -105);
-		Widget_SetLocation(&s->seedHelp, ANCHOR_CENTRE, ANCHOR_CENTRE, -75, -60);
+	/* TOP MIDDLE: world name + seed */
+	Widget_SetLocation(&s->nameLabel, ANCHOR_CENTRE, ANCHOR_CENTRE, -170, -185);
+	Widget_SetLocation(&s->nameText.base, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -150);
+	Widget_SetLocation(&s->saveLabel, ANCHOR_CENTRE, ANCHOR_CENTRE, -90, -115);
 
-		Widget_SetLocation(&s->structures, ANCHOR_CENTRE, ANCHOR_CENTRE, -170, 0);
-		Widget_SetLocation(&s->worldType, ANCHOR_CENTRE, ANCHOR_CENTRE, 170, 0);
-		Widget_SetLocation(&s->structHelp, ANCHOR_CENTRE, ANCHOR_CENTRE, -210, 50);
+	Widget_SetLocation(&s->seedLabel, ANCHOR_CENTRE, ANCHOR_CENTRE, -105, -75);
+	Widget_SetLocation(&s->seedText.base, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -40);
+	Widget_SetLocation(&s->seedHelp, ANCHOR_CENTRE, ANCHOR_CENTRE, -85, -5);
 
-		Widget_SetLocation(&s->done, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 150);
-	}
+	/* BOTTOM LEFT: main settings */
+	Widget_SetLocation(&s->mode, ANCHOR_CENTRE, ANCHOR_CENTRE, leftX, 60);
+	Widget_SetLocation(&s->desc, ANCHOR_CENTRE, ANCHOR_CENTRE, leftX, 115);
 
-	Widget_SetLocation(&s->create, ANCHOR_CENTRE_MIN, ANCHOR_MAX, -180, 25);
-	Widget_SetLocation(&s->cancel, ANCHOR_CENTRE_MAX, ANCHOR_MAX, -180, 25);
-}
+	/* BOTTOM RIGHT: options */
+	Widget_SetLocation(&s->structures, ANCHOR_CENTRE, ANCHOR_CENTRE, rightX, 60);
+	Widget_SetLocation(&s->worldType, ANCHOR_CENTRE, ANCHOR_CENTRE, rightX, 115);
+	Widget_SetLocation(&s->structHelp, ANCHOR_CENTRE, ANCHOR_CENTRE, rightX - 70, 165);
 
-static int CreateWorldScreen_KeyPress(void* screen, char keyChar) {
-	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
-
-	if (!s->optionsPage) {
-		InputWidget_Append(&s->nameInput.base, keyChar);
-	}
-	else {
-		InputWidget_Append(&s->seedInput.base, keyChar);
-	}
-	return true;
-}
-
-static int CreateWorldScreen_TextChanged(void* screen, const cc_string* str) {
-	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
-
-	if (!s->optionsPage) {
-		InputWidget_SetText(&s->nameInput.base, str);
-	}
-	else {
-		InputWidget_SetText(&s->seedInput.base, str);
-	}
-	return true;
-}
-
-static void CreateWorldScreen_Update(void* screen, float delta) {
-	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
-	s->nameInput.base.showCaret = !s->optionsPage;
-	s->seedInput.base.showCaret = s->optionsPage;
-
-	if (!s->optionsPage) {
-		s->nameInput.base.caretAccumulator += delta;
-	}
-	else {
-		s->seedInput.base.caretAccumulator += delta;
-	}
+	Widget_SetLocation(&s->create, ANCHOR_CENTRE, ANCHOR_MAX, -180, 25);
+	Widget_SetLocation(&s->cancel, ANCHOR_CENTRE, ANCHOR_MAX, 180, 25);
 }
 
 static void CreateWorldScreen_Init(void* screen) {
@@ -910,28 +916,30 @@ static void CreateWorldScreen_Init(void* screen) {
 	s->selectedI = -1;
 	s->widgetsPerPage = 3;
 
-	s->optionsPage = false;
 	s->creativeMode = false;
 	s->structuresOn = true;
 	s->worldSize = 256;
+	s->selectedInput = 0;
 
 	MenuInput_String(desc);
 
 	TextWidget_Add(s, &s->title);
 	TextWidget_Add(s, &s->nameLabel);
-	TextInputWidget_Add(s, &s->nameInput, 480, &nameDefault, &desc);
+	//TextWidget_Add(s, &s->nameText);
+	TextInputWidget_Add(s, &s->nameText, 360, &nameDefault, &desc);
 	TextWidget_Add(s, &s->saveLabel);
 	ButtonWidget_Add(s, &s->mode, 360, CreateWorldScreen_Mode);
 	TextWidget_Add(s, &s->desc);
-	ButtonWidget_Add(s, &s->more, 360, CreateWorldScreen_More);
+	
 
 	TextWidget_Add(s, &s->seedLabel);
-	TextInputWidget_Add(s, &s->seedInput, 480, &seedDefault, &desc);
+	//TextWidget_Add(s, &s->seedText);
+	TextInputWidget_Add(s, &s->seedText, 360, &seedDefault, &desc);
 	TextWidget_Add(s, &s->seedHelp);
 	ButtonWidget_Add(s, &s->structures, 340, CreateWorldScreen_Structures);
 	ButtonWidget_Add(s, &s->worldType, 340, NULL);
 	TextWidget_Add(s, &s->structHelp);
-	ButtonWidget_Add(s, &s->done, 360, CreateWorldScreen_Done);
+	
 
 	ButtonWidget_Add(s, &s->create, 340, CreateWorldScreen_Create);
 	ButtonWidget_Add(s, &s->cancel, 340, CreateWorldScreen_Back);
@@ -939,30 +947,27 @@ static void CreateWorldScreen_Init(void* screen) {
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
 }
 
+/*
 static void CreateWorldScreen_BuildMesh(void* screen) {
 	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
-	struct VertexTextured* v;
-
-	v = Screen_LockVb(s);
+	struct VertexTextured* v = Screen_LockVb(s);
 
 	Widget_BuildMesh(&s->title, &v);
 
 	if (!s->optionsPage) {
-		Widget_BuildMesh(&s->nameLabel, &v);
-		Widget_BuildMesh(&s->nameInput.base, &v);
-		Widget_BuildMesh(&s->saveLabel, &v);
 		Widget_BuildMesh(&s->mode, &v);
-		Widget_BuildMesh(&s->desc, &v);
-		Widget_BuildMesh(&s->more, &v);
+
+
+		Widget_BuildMesh(&s->create, &v);
+		Widget_BuildMesh(&s->cancel, &v);
 	}
 	else {
-		Widget_BuildMesh(&s->seedLabel, &v);
-		Widget_BuildMesh(&s->seedInput.base, &v);
-		Widget_BuildMesh(&s->seedHelp, &v);
 		Widget_BuildMesh(&s->structures, &v);
 		Widget_BuildMesh(&s->worldType, &v);
-		Widget_BuildMesh(&s->structHelp, &v);
-		Widget_BuildMesh(&s->done, &v);
+);
+
+		Widget_BuildMesh(&s->create, &v);
+		Widget_BuildMesh(&s->cancel, &v);
 	}
 
 	Widget_BuildMesh(&s->create, &v);
@@ -970,21 +975,73 @@ static void CreateWorldScreen_BuildMesh(void* screen) {
 
 	Gfx_UnlockDynamicVb(s->vb);
 }
+*/
+
+
+
+static int CreateWorldScreen_KeyPress(void* screen, char keyChar) {
+	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
+
+	if (s->selectedInput == 1) {
+		InputWidget_Append(&s->seedText.base, keyChar);
+	}
+	else {
+		InputWidget_Append(&s->nameText.base, keyChar);
+	}
+	return true;
+}
+
+static int CreateWorldScreen_TextChanged(void* screen, const cc_string* str) {
+	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
+
+	if (s->selectedInput == 1) {
+		InputWidget_SetText(&s->seedText.base, str);
+	}
+	else {
+		InputWidget_SetText(&s->nameText.base, str);
+	}
+	return true;
+}
+
+static int CreateWorldScreen_PointerDown(void* screen, int id, int x, int y) {
+	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
+
+	s->selectedI = Screen_DoPointerDown(screen, id, x, y);
+
+	if (Widget_Contains(&s->seedText.base, x, y)) {
+		s->selectedInput = 1;
+		OnscreenKeyboard_SetText(&s->seedText.base.text);
+	}
+	else if (Widget_Contains(&s->nameText.base, x, y)) {
+		s->selectedInput = 0;
+		OnscreenKeyboard_SetText(&s->nameText.base.text);
+	}
+
+	return TOUCH_TYPE_GUI;
+}
 
 static const struct ScreenVTABLE CreateWorldScreen_VTABLE = {
-	CreateWorldScreen_Init,        CreateWorldScreen_Update, Screen_NullFunc,
-	MainMenuScreen_Render,         Screen_BuildMesh,
-	Menu_InputDown,                Screen_InputUp, CreateWorldScreen_KeyPress, CreateWorldScreen_TextChanged,
-	Menu_PointerDown,              Screen_PointerUp, Menu_PointerMove, Screen_TMouseScroll,
+	CreateWorldScreen_Init,        Screen_NullUpdate, Screen_NullFunc,
+	MainMenuScreen_Render, Screen_BuildMesh,
+	CreateWorldScreen_KeyDown, Screen_InputUp, CreateWorldScreen_KeyPress, CreateWorldScreen_TextChanged,
+CreateWorldScreen_PointerDown, Screen_PointerUp, Menu_PointerMove, Screen_TMouseScroll,
 	CreateWorldScreen_Layout,      CreateWorldScreen_ContextLost, CreateWorldScreen_ContextRecreated,
 	Menu_PadAxis
 };
+
+static int CreateWorldScreen_KeyDown(void* screen, int key, struct InputDevice* device) {
+	if (key == CCKEY_ESCAPE) return true;
+
+	if (device) return Menu_InputDown(screen, key, device);
+
+	return false;
+}
 
 void CreateWorldScreen_Show(void) {
 	struct CreateWorldScreen* s = &CreateWorldScreen;
 
 	s->grabsInput = true;
-	s->closable = true;
+	s->closable = false; /* block ESC closing */
 	s->blocksWorld = true;
 	s->VTABLE = &CreateWorldScreen_VTABLE;
 
@@ -1975,7 +2032,7 @@ static void SaveLevelScreen_UploadCallback(const cc_string* path) {
 
 static void SaveLevelScreen_File(void* screen, void* b) {
 	static const char* const titles[] = {
-		"ClassiCube map", "Minecraft schematic", "Minecraft classic map", NULL
+		"CavFX map", "Minecraft schematic", "Minecraft classic map", NULL
 	};
 	static const char* const filters[] = {
 		".cw", ".schematic", ".mine", NULL

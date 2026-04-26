@@ -418,7 +418,7 @@ const BindMapping KeyBind_Defaults[BIND_COUNT] = {
 	{ 'W', 0 }, { 'S', 0 }, { 'A', 0 }, { 'D', 0 }, /* BIND_FORWARD - BIND_RIGHT */
 	{ CCKEY_SPACE, 0 },  { 0, 0 },                  /* BIND_JUMP, BIND_RESPAWN */
 	{ 0, 0 },           { 'T', 0 },                 /* BIND_SET_SPAWN, BIND_CHAT */
-	{ 'E', 0 },          { 'F', 0 },                /* BIND_INVENTORY, BIND_FOG */
+	{ 'I', 0 },          { 'F', 0 },                /* BIND_INVENTORY, BIND_FOG */
 	{ CCKEY_ENTER, 0 },  { CCKEY_TAB, 0 },          /* BIND_SEND_CHAT, BIND_TABLIST */
 	{ CCKEY_LCTRL, 0 },  { 'X', 0}, { 'Z', 0 },     /* BIND_SPEED, BIND_NOCLIP, BIND_FLY */ 
 	{ 'Q', 0 },          { 'E', 0 },                /* BIND_FLY_UP, BIND_FLY_DOWN */

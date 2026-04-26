@@ -9,7 +9,7 @@ endif
 # Configurable options
 #---------------------------------------------------------------------------------
 # Name of the final output
-TARGET 		= ClassiCube-3ds
+TARGET 		= CavFX-3ds
 # List of directories containing source code
 SOURCE_DIRS	= src src/3ds third_party/bearssl
 # List of directories containing shader files
@@ -18,11 +18,20 @@ SHDR_DIRS   = misc/3ds
 BUILD_DIR	= build/3ds
 PRELOAD_DIR = src/preload
 PRELOAD_ROOT = $(BUILD_DIR)/sdroot/3ds/ClassiCube
+CITRA_SD_ROOT ?=
+AZAHAR_SD_ROOT ?=
+EMU_SD_ROOT ?=
+ifneq ($(strip $(AZAHAR_SD_ROOT)),)
+EMU_SD_ROOT := $(AZAHAR_SD_ROOT)
+else ifneq ($(strip $(CITRA_SD_ROOT)),)
+EMU_SD_ROOT := $(CITRA_SD_ROOT)
+endif
+EMU_PRELOAD_ROOT = $(EMU_SD_ROOT)/3ds/ClassiCube
 
 APP_ICON	= misc/3ds/icon.png
-APP_TITLE 	= ClassiCube
+APP_TITLE 	= CavFX
 APP_DESCRIPTION = Simple block building sandbox
-APP_AUTHOR 	= ClassiCube team
+APP_AUTHOR 	= YetRunnerGamez
 
 CIA_BANNER_BIN	= misc/3ds/banner.bin
 CIA_ICON_BIN	= misc/3ds/icon.bin
@@ -86,7 +95,14 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 copy-preload:
-	if [ -d "$(PRELOAD_DIR)" ]; then mkdir -p "$(PRELOAD_ROOT)" && cp -r "$(PRELOAD_DIR)"/* "$(PRELOAD_ROOT)"/ 2>/dev/null || true; fi
+	if [ -d "$(PRELOAD_DIR)" ]; then \
+		mkdir -p "$(PRELOAD_ROOT)"; \
+		cp -r "$(PRELOAD_DIR)"/* "$(PRELOAD_ROOT)"/; \
+		if [ -n "$(EMU_SD_ROOT)" ]; then \
+			mkdir -p "$(EMU_PRELOAD_ROOT)"; \
+			cp -r "$(PRELOAD_DIR)"/* "$(EMU_PRELOAD_ROOT)"/; \
+		fi; \
+	fi
 
 
 #---------------------------------------------------------------------------------
@@ -104,10 +120,10 @@ $(TARGET).3dsx: $(TARGET).elf $(BUILD_DIR).smdh
 $(BUILD_DIR)/makerom:
 	wget https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.18.3/makerom-v0.18.3-ubuntu_x86_64.zip -O $(BUILD_DIR)/makerom.zip
 	unzip $(BUILD_DIR)/makerom.zip -d $(BUILD_DIR)
-	chmod +x $(BUILD_DIR)/makerom
+	chmod +x $(BUILD_DIR)/makerom.exe
 
 $(TARGET).cia : $(TARGET).3dsx $(BUILD_DIR)/makerom
-	$(BUILD_DIR)/makerom -f cia -o $(TARGET).cia -elf $(TARGET).elf -rsf $(CIA_SPEC_RSF) -icon $(CIA_ICON_BIN) -banner $(CIA_BANNER_BIN) -exefslogo -target t
+	$(BUILD_DIR)/makerom.exe -f cia -o $(TARGET).cia -elf $(TARGET).elf -rsf $(CIA_SPEC_RSF) -icon $(CIA_ICON_BIN) -banner $(CIA_BANNER_BIN) -exefslogo -target t
 
 
 #---------------------------------------------------------------------------------

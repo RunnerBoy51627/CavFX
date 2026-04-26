@@ -48,8 +48,8 @@ void Window_Init(void) {
 	Window_Main.UIScaleY = DEFAULT_UI_SCALE_Y;
 
 	Window_Main.SoftKeyboard = SOFT_KEYBOARD_RESIZE;
-	Input_SetTouchMode(true);
-	Gui_SetTouchUI(true);
+	Input_SetTouchMode(false);
+	Gui_SetTouchUI(false);
 	
 	Window_Alt.Width  = btm_width;
 	Window_Alt.Height = btm_height;

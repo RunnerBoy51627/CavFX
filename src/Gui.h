@@ -49,7 +49,7 @@ CC_VAR extern struct _GuiData {
 	/* Whether classic-style inventory is used */
 	cc_bool ClassicInventory;
 	float RawHotbarScale, RawChatScale, RawInventoryScale, RawCrosshairScale;
-	GfxResourceID GuiTex, GuiClassicTex, IconsTex, TouchTex;
+	GfxResourceID GuiTex, GuiClassicTex, IconsTex, TouchTex, ItemsTex;
 	int DefaultLines;
 	int _unused;
 	float RawTouchScale;

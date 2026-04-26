@@ -417,14 +417,15 @@ cc_result Platform_GetEntropy(void* data, int len) {
 *------------------------------------------------------Main driver--------------------------------------------------------*
 *#########################################################################################################################*/
 static void DoNextFrame(void) {
-	if (Game_Running) {
-		Game_RenderFrame();
-		return;
-	}
+    if (Game_Running) {
+        Window_ProcessEvents(0.0f);
+        Game_RenderFrame();
+        return;
+    }
 
-	Game_Free();
-	Window_Free();
-	emscripten_cancel_main_loop();
+    Game_Free();
+    Window_Free();
+    emscripten_cancel_main_loop();
 }
 
 int Platform_GetCommandLineArgs(int argc, STRING_REF char** argv, cc_string* args) {
@@ -470,16 +471,14 @@ extern void interop_DirectorySetWorking(const char* path);
 extern void interop_AsyncDownloadTexturePack(const char* path);
 
 EMSCRIPTEN_KEEPALIVE int main(int argc, char** argv) {
-	_argc = argc; _argv = argv;
+    _argc = argc;
+    _argv = argv;
 
-	// Game loads resources asynchronously, then actually starts itself:
-	// main
-	//  > texture pack download (async)
-	//     > load indexedDB (async)
-	//        > web_main (game actually starts)
-	interop_FS_Init();
-	interop_DirectorySetWorking("/classicube");
-	interop_AsyncDownloadTexturePack("texpacks/default.zip");
+    interop_FS_Init();
+    interop_DirectorySetWorking("/classicube");
+
+    web_main();   // start immediately
+    return 0;
 }
 
 extern void interop_LoadIndexedDB(void);

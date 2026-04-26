@@ -31,7 +31,7 @@ void Menu_LayoutBack(struct ButtonWidget* btn);
 
 void PauseScreen_Show(void);
 void MainMenuScreen_Show(void);
-void Menu_RenderBounds_Menu(void);
+static void Menu_RenderBounds_Menu(void);
 void OptionsGroupScreen_Show(void);
 void ClassicOptionsScreen_Show(void);
 void ClassicPauseScreen_Show(void);
@@ -41,9 +41,10 @@ static void CreateWorldScreen_Back(void* screen, void* widget);
 static void CreateWorldScreen_ContextRecreated(void* screen);
 void CreateWorldScreen_Show(void);
 static void CreateWorldScreen_Layout(void* screen);
-static void CreateWorldScreen_BuildMesh(void* screen);
+//static void CreateWorldScreen_BuildMesh(void* screen);
 static int CreateWorldScreen_KeyPress(void* screen, char keyChar);
 static int CreateWorldScreen_TextChanged(void* screen, const cc_string* str);
+static int CreateWorldScreen_KeyDown(void* screen, int key, struct InputDevice* device);
 
 void ClassicBindingsScreen_Show(void);
 void ClassicHacksBindingsScreen_Show(void);

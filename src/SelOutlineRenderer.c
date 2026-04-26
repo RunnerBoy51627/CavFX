@@ -7,11 +7,16 @@
 #include "Funcs.h"
 #include "Camera.h"
 #include "Options.h"
+#include "TexturePack.h"
+#include "Block.h"
 
 static GfxResourceID selOutline_vb;
+static GfxResourceID break_vb;
 static float base_size;
 static PackedCol color;
 #define SELOUTLINE_NUM_VERTICES (16 * 6)
+#define BREAKING_NUM_VERTICES (4 * 6)
+#define BREAKING_TEX_BASE 240
 
 #define SelOutline_Y(y)\
 0,y,1,  0,y,2,  1,y,2,  1,y,1,\
@@ -110,12 +115,81 @@ void SelOutlineRenderer_Render(struct RayTracer* selected, cc_bool dirty) {
 	Gfx_SetAlphaBlending(false);
 }
 
+static void Break_SetVertex(struct VertexTextured* v, float x, float y, float z, float u, float vv) {
+	v->x = x; v->y = y; v->z = z;
+	v->Col = PACKEDCOL_WHITE;
+	v->U = u; v->V = vv;
+}
+
+static void Break_Quad(struct VertexTextured** ptr, Vec3 a, Vec3 b, Vec3 c, Vec3 d, TextureRec uv) {
+	struct VertexTextured* v = *ptr;
+	Break_SetVertex(v++, a.x, a.y, a.z, uv.u1, uv.v2);
+	Break_SetVertex(v++, b.x, b.y, b.z, uv.u1, uv.v1);
+	Break_SetVertex(v++, c.x, c.y, c.z, uv.u2, uv.v1);
+	Break_SetVertex(v++, d.x, d.y, d.z, uv.u2, uv.v2);
+	*ptr = v;
+}
+
+static void BuildBreakingMesh(struct RayTracer* selected, TextureRec uv) {
+	struct VertexTextured* data;
+	struct VertexTextured* ptr;
+	Vec3 min, max;
+	float eps = 0.003f;
+
+	Vec3_Add1(&min, &selected->Min, -eps);
+	Vec3_Add1(&max, &selected->Max,  eps);
+	data = (struct VertexTextured*)Gfx_LockDynamicVb(break_vb, VERTEX_FORMAT_TEXTURED, BREAKING_NUM_VERTICES);
+	ptr  = data;
+
+	/* Y min, Y max */
+	Break_Quad(&ptr, Vec3_Create3(min.x, min.y, max.z), Vec3_Create3(min.x, min.y, min.z), Vec3_Create3(max.x, min.y, min.z), Vec3_Create3(max.x, min.y, max.z), uv);
+	Break_Quad(&ptr, Vec3_Create3(min.x, max.y, min.z), Vec3_Create3(min.x, max.y, max.z), Vec3_Create3(max.x, max.y, max.z), Vec3_Create3(max.x, max.y, min.z), uv);
+	/* X min, X max */
+	Break_Quad(&ptr, Vec3_Create3(min.x, min.y, min.z), Vec3_Create3(min.x, max.y, min.z), Vec3_Create3(min.x, max.y, max.z), Vec3_Create3(min.x, min.y, max.z), uv);
+	Break_Quad(&ptr, Vec3_Create3(max.x, min.y, max.z), Vec3_Create3(max.x, max.y, max.z), Vec3_Create3(max.x, max.y, min.z), Vec3_Create3(max.x, min.y, min.z), uv);
+	/* Z min, Z max */
+	Break_Quad(&ptr, Vec3_Create3(max.x, min.y, min.z), Vec3_Create3(max.x, max.y, min.z), Vec3_Create3(min.x, max.y, min.z), Vec3_Create3(min.x, min.y, min.z), uv);
+	Break_Quad(&ptr, Vec3_Create3(min.x, min.y, max.z), Vec3_Create3(min.x, max.y, max.z), Vec3_Create3(max.x, max.y, max.z), Vec3_Create3(max.x, min.y, max.z), uv);
+
+	Gfx_UnlockDynamicVb(break_vb);
+}
+
+void SelOutlineRenderer_RenderBreaking(struct RayTracer* selected, float progress) {
+	TextureRec uv;
+	TextureLoc loc;
+	int stage, atlasIndex;
+	if (Gfx.LostContext || progress <= 0.0f) return;
+	if (Blocks.Draw[selected->block] == DRAW_GAS) return;
+
+	stage = (int)(progress * 10.0f);
+	if (stage < 0) stage = 0;
+	if (stage > 9) stage = 9;
+	loc = BREAKING_TEX_BASE + stage;
+	if (Atlas2D_TileY(loc) >= Atlas2D.RowsCount) return;
+
+	uv = Atlas1D_TexRec(loc, 1, &atlasIndex);
+	if (!break_vb) break_vb = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, BREAKING_NUM_VERTICES);
+	BuildBreakingMesh(selected, uv);
+
+	Gfx_SetAlphaTest(true);
+	Gfx_SetAlphaBlending(true);
+	Gfx_SetDepthWrite(false);
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	Gfx_BindDynamicVb(break_vb);
+	Atlas1D_Bind(atlasIndex);
+	Gfx_DrawVb_IndexedTris(BREAKING_NUM_VERTICES);
+	Gfx_SetDepthWrite(true);
+	Gfx_SetAlphaBlending(false);
+	Gfx_SetAlphaTest(false);
+}
+
 
 /*########################################################################################################################*
 *-----------------------------------------------SelOutlineRenderer component----------------------------------------------*
 *#########################################################################################################################*/
 static void OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&selOutline_vb);
+	Gfx_DeleteDynamicVb(&break_vb);
 }
 
 static void OnInit(void) {

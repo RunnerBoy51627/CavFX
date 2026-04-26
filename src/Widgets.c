@@ -18,6 +18,8 @@
 #include "Input.h"
 #include "InputHandler.h"
 #include "Launcher.h"
+#include "SurvivalItems.h"
+#include "TexturePack.h"
 
 static void Widget_NullFunc(void* widget) { }
 static int  Widget_Pointer(void* elem, int id, int x, int y) { return false; }
@@ -450,10 +452,34 @@ static void HotbarWidget_BuildEntriesMesh(struct HotbarWidget* w, struct VertexT
 		y = w->y + (w->height / 2);
 
 		if (i == HOTBAR_MAX_INDEX && Gui_TouchUI) continue;
+		if (SurvivalItem_IsItem(Inventory_Get(i))) continue;
 
 		IsometricDrawer_AddBatch(Inventory_Get(i), scale, x, y);
 	}
 	w->verticesCount = IsometricDrawer_EndBatch();
+}
+
+static void Widgets_DrawSurvivalItem(BlockID item, int x, int y, int size) {
+	struct Texture tex;
+	TextureLoc loc;
+	int col, row;
+	if (!Gui.ItemsTex || !SurvivalItem_IsItem(item)) return;
+
+	loc = SurvivalItem_TextureLoc(item);
+	col = Atlas2D_TileX(loc);
+	row = Atlas2D_TileY(loc);
+
+	tex.ID     = Gui.ItemsTex;
+	tex.x      = (short)(x - size / 2);
+	tex.y      = (short)(y - size / 2);
+	tex.width  = (cc_uint16)size;
+	tex.height = (cc_uint16)size;
+	tex.uv.u1  = col / 16.0f;
+	tex.uv.v1  = row / 16.0f;
+	tex.uv.u2  = (col + 1) / 16.0f;
+	tex.uv.v2  = (row + 1) / 16.0f;
+
+	Texture_Render(&tex);
 }
 
 static void HotbarWidget_BuildMesh(void* widget, struct VertexTextured** vertices) {
@@ -475,8 +501,18 @@ static void HotbarWidget_RenderOutline(struct HotbarWidget* w, int offset) {
 }
 
 static void HotbarWidget_RenderEntries(struct HotbarWidget* w, int offset) {
-	if (w->verticesCount == 0) return;
-	IsometricDrawer_Render(w->verticesCount, offset, w->state);
+	int i, x, y, size;
+	if (w->verticesCount) IsometricDrawer_Render(w->verticesCount, offset, w->state);
+
+	size = (int)(w->elemSize * 0.95f);
+	for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
+		if (i == HOTBAR_MAX_INDEX && Gui_TouchUI) continue;
+		if (!SurvivalItem_IsItem(Inventory_Get(i))) continue;
+
+		x = HotbarWidget_TileX(w, i);
+		y = w->y + (w->height / 2);
+		Widgets_DrawSurvivalItem(Inventory_Get(i), x, y, size);
+	}
 }
 
 static void HotbarWidget_RenderCounts(struct HotbarWidget* w) {
@@ -740,9 +776,10 @@ void HotbarWidget_Create(struct HotbarWidget* w) {
 	w->VTABLE    = &HotbarWidget_VTABLE;
 	w->horAnchor = ANCHOR_CENTRE;
 	w->verAnchor = ANCHOR_MAX;
-#ifdef CC_BUILD_GAMECUBE && CC_BUILD_WII
-	w->yOffset = -Display_ScaleY(-25);
-	#else
+#if defined(CC_BUILD_GAMECUBE) || defined(CC_BUILD_WII)
+w->yOffset = -Display_ScaleY(-25);
+#else
+w->yOffset = -Display_ScaleY(0);
 #endif
 	w->scale     = 1;
 	w->verticesCount = 0;
@@ -855,7 +892,7 @@ void TableWidget_RecreateBlocks(struct TableWidget* w) {
 	if (Game_SurvivalMode) {
 		for (i = 0; i < INVENTORY_SURVIVAL_SLOTS; i++) {
 			block = Inventory.Table[i];
-			if (block > max) block = BLOCK_AIR;
+			if (block > max && !SurvivalItem_IsItem(block)) block = BLOCK_AIR;
 			w->blockRawSlots[w->blocksCount] = i;
 			w->blocks[w->blocksCount++] = block;
 		}
@@ -871,7 +908,7 @@ void TableWidget_RecreateBlocks(struct TableWidget* w) {
 
 		for (; i < rowEnd; i++) {
 			block = Inventory.Map[i];
-			if (block > max) continue;
+			if (block > max && !SurvivalItem_IsItem(block)) continue;
 			
 			w->blockRawSlots[w->blocksCount] = -1;
 			w->blocks[w->blocksCount++] = block;
@@ -986,6 +1023,7 @@ static void TableWidget_BuildMesh(void* widget, struct VertexTextured** vertices
 	for (i = 0; i < w->blocksCount; i++) {
 		if (!TableWidget_GetCoords(w, i, &x, &y)) continue;
 		if (w->blocks[i] == BLOCK_AIR) continue;
+		if (SurvivalItem_IsItem(w->blocks[i])) continue;
 
 		/* Creative inventory redraws selected block larger/on top; survival keeps a stable grid. */
 		if (!Game_SurvivalMode && i == w->selectedIndex) continue;
@@ -1053,8 +1091,13 @@ static int TableWidget_Render2(void* widget, int offset) {
 		IsometricDrawer_Render(w->verticesCount, offset, w->state);
 	}
 
-	if (Game_SurvivalMode) {
-		for (i = 0; i < w->blocksCount; i++) {
+	for (i = 0; i < w->blocksCount; i++) {
+		if (SurvivalItem_IsItem(w->blocks[i]) && TableWidget_GetCoords(w, i, &x, &y)) {
+			size = (int)(cellSizeX * 0.82f);
+			Widgets_DrawSurvivalItem(w->blocks[i], x + cellSizeX / 2, y + cellSizeY / 2, size);
+		}
+
+		if (Game_SurvivalMode) {
 			raw = w->blockRawSlots[i];
 			if (raw < 0 || raw >= INVENTORY_SURVIVAL_SLOTS) continue;
 			if (Inventory.Counts[raw] <= 1) continue;

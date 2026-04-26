@@ -1058,6 +1058,10 @@ LAYOUTS cres_btnNo[]  = { { ANCHOR_CENTRE,  70 }, { ANCHOR_CENTRE, 45 } };
 static void CheckResourcesScreen_Yes(void*  w) { FetchResourcesScreen_SetActive(); }
 static void CheckResourcesScreen_Next(void* w) {
 	Http_ClearPending();
+	if (Launcher_ResourcesOnly) {
+		Launcher_ShouldStop = true;
+		return;
+	}
 	if (Options_LoadResult != ReturnCode_FileNotFound) {
 		MainScreen_SetActive();
 	} else {

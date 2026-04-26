@@ -24,10 +24,16 @@
 #include "Options.h"
 #include "InputHandler.h"
 #include "Protocol.h"
+#include "SurvivalItems.h"
 
 #define CHAT_MAX_STATUS Array_Elems(Chat_Status)
 #define CHAT_MAX_BOTTOMRIGHT Array_Elems(Chat_BottomRight)
 #define CHAT_MAX_CLIENTSTATUS Array_Elems(Chat_ClientStatus)
+#define HUD_VERSION_OFFSET 12
+#define HUD_HOTBAR_OFFSET  16
+#define HUD_LINE1_OFFSET     4
+#define HUD_LINE2_OFFSET     8
+
 
 int Screen_FInput(void* s, int key, struct InputDevice* device) { return false; }
 int Screen_FKeyPress(void* s, char keyChar)     { return false; }
@@ -70,7 +76,7 @@ CC_NOINLINE static cc_bool IsOnlyChatActive(void) {
 static struct HUDScreen {
 	Screen_Body
 	struct FontDesc font;
-	struct TextWidget line1, line2;
+	struct TextWidget line1, line2, version;
 	struct TextAtlas posAtlas;
 	float accumulator;
 	int frames, posCount;
@@ -78,7 +84,6 @@ static struct HUDScreen {
 	float lastSpeed;
 	int lastFov;
 	int lastHealth;
-	int lastStamina;
 	int lastX, lastY, lastZ;
 	struct HotbarWidget hotbar;
 } HUDScreen_Instance CC_BIG_VAR;
@@ -89,16 +94,14 @@ static struct HUDScreen {
 #define POSITION_HUD_CHARS (1 + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1)
 #define SURVIVAL_HEARTS 10
 #define SURVIVAL_HEART_VERTICES (SURVIVAL_HEARTS * 2 * 4)
-#define SURVIVAL_STAMINA 10
-#define SURVIVAL_STAMINA_ICON_SIZE 9
-#define SURVIVAL_STAMINA_VERTICES (SURVIVAL_STAMINA * SURVIVAL_STAMINA_ICON_SIZE * SURVIVAL_STAMINA_ICON_SIZE * 4)
-#define SURVIVAL_HUD_VERTICES (SURVIVAL_HEART_VERTICES + SURVIVAL_STAMINA_VERTICES)
-#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES + SURVIVAL_HUD_VERTICES + POSITION_HUD_CHARS * 4)
+#define SURVIVAL_HUD_VERTICES SURVIVAL_HEART_VERTICES
+#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 3 + HOTBAR_MAX_VERTICES + SURVIVAL_HUD_VERTICES + POSITION_HUD_CHARS * 4)
 
 static void HUDScreen_RemakeLine1(struct HUDScreen* s) {
 	cc_string status; char statusBuffer[STRING_SIZE * 2];
 	int indices, ping, fps;
 	float real_fps;
+
 
 	String_InitArray(status, statusBuffer);
 	/* Don't remake texture when FPS isn't being shown */
@@ -179,7 +182,6 @@ static void HUDScreen_RemakeLine2(struct HUDScreen* s) {
 	if (Game_ClassicMode) {
 		TextWidget_SetConst(&s->line2, Game_Version.Name, &s->font);
 		s->lastHealth = Entities.CurPlayer->Health;
-		s->lastStamina = (int)Entities.CurPlayer->Stamina;
 		return;
 	}
 
@@ -198,7 +200,6 @@ static void HUDScreen_RemakeLine2(struct HUDScreen* s) {
 
 	TextWidget_Set(&s->line2, &status, &s->font);
 	s->lastHealth = Entities.CurPlayer->Health;
-	s->lastStamina = (int)Entities.CurPlayer->Stamina;
 }
 
 
@@ -211,6 +212,7 @@ static void HUDScreen_ContextLost(void* screen) {
 	Elem_Free(&s->hotbar);
 	Elem_Free(&s->line1);
 	Elem_Free(&s->line2);
+	Elem_Free(&s->version);
 }
 
 static void HUDScreen_ContextRecreated(void* screen) {	
@@ -227,6 +229,7 @@ static void HUDScreen_ContextRecreated(void* screen) {
 	HUDScreen_RemakeLine1(s);
 	TextAtlas_Make(&s->posAtlas, &chars, &s->font, &prefix);
 	HUDScreen_RemakeLine2(s);
+	TextWidget_SetConst(&s->version, Game_Version.Name, &s->font);
 }
 
 int HUDScreen_LayoutHotbar(void) {
@@ -242,12 +245,16 @@ static void HUDScreen_Layout(void* screen) {
 	struct TextWidget* line2 = &s->line2;
 	int posY;
 
-	Widget_SetLocation(line1, ANCHOR_MIN, ANCHOR_MIN, 
-						2 + DisplayInfo.ContentOffsetX, 2 + DisplayInfo.ContentOffsetY);
+	Widget_SetLocation(&s->version, ANCHOR_MIN, ANCHOR_MIN,
+		2 + DisplayInfo.ContentOffsetX,
+		2 + DisplayInfo.ContentOffsetY);
+
+	Widget_SetLocation(&s->line1, ANCHOR_MIN, ANCHOR_MIN,
+		2 + DisplayInfo.ContentOffsetX,
+		s->version.y + s->version.height + 2);
+
 	posY = line1->y + line1->height;
 	s->posAtlas.tex.y = posY;
-	Widget_SetLocation(line2, ANCHOR_MIN, ANCHOR_MIN, 
-						2 + DisplayInfo.ContentOffsetX, 0);
 	
 	if (Game_ClassicMode) {
 		// Swap around so 0.30 version is at top
@@ -260,7 +267,7 @@ static void HUDScreen_Layout(void* screen) {
 	}
 	
 	HUDScreen_LayoutHotbar();
-	Widget_Layout(line2);
+	Widget_Layout(line1);
 }
 
 static int HUDScreen_KeyDown(void* screen, int key, struct InputDevice* device) {
@@ -320,6 +327,9 @@ static void HUDScreen_Init(void* screen) {
 	HotbarWidget_Create(&s->hotbar);
 	TextWidget_Init(&s->line1);
 	TextWidget_Init(&s->line2);
+
+	TextWidget_Init(&s->version);
+	s->version.flags |= WIDGET_FLAG_MAINSCREEN;
 	
 	s->line1.flags  |= WIDGET_FLAG_MAINSCREEN;
 	s->line2.flags  |= WIDGET_FLAG_MAINSCREEN;
@@ -354,10 +364,6 @@ static void HUDScreen_Update(void* screen, float delta) {
 	HotbarWidget_Update(&s->hotbar, delta);
 	if (Game_SurvivalMode && s->lastHealth != Entities.CurPlayer->Health) {
 		HUDScreen_RemakeLine2(s);
-	}
-	if (Game_SurvivalMode && s->lastStamina != (int)Entities.CurPlayer->Stamina) {
-		s->lastStamina = (int)Entities.CurPlayer->Stamina;
-		s->dirty = true;
 	}
 	if (Game_ClassicMode) return;
 
@@ -425,71 +431,6 @@ static void HUDScreen_BuildHealthMesh(struct HUDScreen* s, struct VertexTextured
 	}
 }
 
-static void HUDScreen_BuildStaminaRect(struct Texture* tex, struct VertexTextured** ptr, int x, int y, int w, int h, PackedCol col) {
-	tex->x = x; tex->y = y; tex->width = w; tex->height = h;
-	Gfx_Make2DQuad(tex, col, ptr);
-}
-
-static void HUDScreen_BuildStaminaBolt(struct Texture* tex, struct VertexTextured** ptr, int x, int y, int scale, PackedCol col) {
-	static const char* fill[SURVIVAL_STAMINA_ICON_SIZE] = {
-		".........",
-		".........",
-		".........",
-		"XX..XX...",
-		"XXXXXXX..",
-		".XXXXXXX.",
-		"...XX.XXX",
-		".......XX",
-		"........."
-	};
-	int px, py, nx, ny;
-	cc_bool filled, outline;
-
-	for (py = 0; py < SURVIVAL_STAMINA_ICON_SIZE; py++) {
-		for (px = 0; px < SURVIVAL_STAMINA_ICON_SIZE; px++) {
-			filled = fill[py][px] == 'X';
-			outline = filled;
-			if (!outline) {
-				for (ny = -1; ny <= 1 && !outline; ny++) {
-					for (nx = -1; nx <= 1; nx++) {
-						if (nx && ny) continue;
-						if (px + nx < 0 || px + nx >= SURVIVAL_STAMINA_ICON_SIZE) continue;
-						if (py + ny < 0 || py + ny >= SURVIVAL_STAMINA_ICON_SIZE) continue;
-						if (fill[py + ny][px + nx] == 'X') { outline = true; break; }
-					}
-				}
-			}
-
-			if (!outline) {
-				HUDScreen_BuildStaminaRect(tex, ptr, x, y, 0, 0, PACKEDCOL_WHITE);
-			} else {
-				HUDScreen_BuildStaminaRect(tex, ptr, x + px * scale, y + py * scale, scale, scale,
-					filled ? col : PackedCol_Make(0, 0, 0, 255));
-			}
-		}
-	}
-}
-
-static void HUDScreen_BuildStaminaMesh(struct HUDScreen* s, struct VertexTextured** ptr) {
-	static struct Texture tex = { 0, Tex_Rect(0,0,1,1), Tex_UV(7/256.0f,7/64.0f,8/256.0f,8/64.0f) };
-	float scaleF = s->hotbar.scale * DisplayInfo.ScaleX;
-	int scale = max(1, Math_Ceil(scaleF));
-	int step = Math_Ceil(8.0f * s->hotbar.scale * DisplayInfo.ScaleX);
-	int meterWidth = (SURVIVAL_STAMINA - 1) * step + SURVIVAL_STAMINA_ICON_SIZE * scale;
-	int x = s->hotbar.x + s->hotbar.width - meterWidth;
-	int y = s->hotbar.y - Math_Ceil(9.0f * s->hotbar.scale * DisplayInfo.ScaleY) - Math_Ceil(4.0f * DisplayInfo.ScaleY);
-	int stamina = (int)Entities.CurPlayer->Stamina;
-	int filled = Math_Ceil(stamina / 10.0f);
-	int firstFilled = SURVIVAL_STAMINA - filled;
-	PackedCol on = stamina <= 20 ? PackedCol_Make(255, 58, 34, 255) : PackedCol_Make(255, 219, 28, 255);
-	PackedCol off = PackedCol_Make(76, 76, 76, 255);
-	int i;
-
-	for (i = 0; i < SURVIVAL_STAMINA; i++) {
-		HUDScreen_BuildStaminaBolt(&tex, ptr, x + i * step, y, scale, i >= firstFilled ? on : off);
-	}
-}
-
 static void HUDScreen_BuildMesh(void* screen) {
 	struct HUDScreen* s = (struct HUDScreen*)screen;
 	struct VertexTextured* data;
@@ -499,12 +440,13 @@ static void HUDScreen_BuildMesh(void* screen) {
 	ptr  = &data;
 
 	HUDScreen_BuildCrosshairsMesh(ptr);
-	Widget_BuildMesh(&s->line1,  ptr);
-	Widget_BuildMesh(&s->line2,  ptr);
+	Widget_BuildMesh(&s->line1, ptr);
+	Widget_BuildMesh(&s->line2, ptr);
+	Widget_BuildMesh(&s->version, ptr);
 	Widget_BuildMesh(&s->hotbar, ptr);
+
 	if (Game_SurvivalMode) {
 		HUDScreen_BuildHealthMesh(s, ptr);
-		HUDScreen_BuildStaminaMesh(s, ptr);
 	}
 
 	if (!Game_ClassicMode) 
@@ -521,20 +463,22 @@ static void HUDScreen_Render(void* screen, float delta) {
 
 	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	Gfx_BindDynamicVb(s->vb);
+
+	Widget_Render2(&s->version, 12);
+
 	if (Gui.ShowFPS) Widget_Render2(&s->line1, 4);
 
-	if (Game_ClassicMode) {
+	if (Game_ClassicMode || (IsOnlyChatActive() && Gui.ShowFPS)) {
 		Widget_Render2(&s->line2, 8);
-	} else if (IsOnlyChatActive() && Gui.ShowFPS) {
-		Widget_Render2(&s->line2, 8);
-		Gfx_BindTexture(s->posAtlas.tex.ID);
-		Gfx_DrawVb_IndexedTris_Range(s->posCount, 12 + HOTBAR_MAX_VERTICES + survivalOffset, DRAW_HINT_RECT);
-		/* TODO swap these two lines back */
+	}
+
+	if (!Gui_GetBlocksWorld()) {
+		if (!Gui.HideHotbar) Widget_Render2(&s->hotbar, 16);
 	}
 
 	if (!Gui_GetBlocksWorld()) {
 		Gfx_BindDynamicVb(s->vb);
-		if (!Gui.HideHotbar) Widget_Render2(&s->hotbar, 12);
+		if (!Gui.HideHotbar) Widget_Render2(&s->hotbar, HUD_HOTBAR_OFFSET);
 
 		if (!Gui.HideCrosshair && Gui.IconsTex && !tablist_active) {
 			Gfx_BindTexture(Gui.IconsTex);
@@ -544,7 +488,7 @@ static void HUDScreen_Render(void* screen, float delta) {
 		if (Game_SurvivalMode && Gui.IconsTex) {
 			Gfx_BindTexture(Gui.IconsTex);
 			Gfx_BindDynamicVb(s->vb);
-			Gfx_DrawVb_IndexedTris_Range(SURVIVAL_HUD_VERTICES, 12 + HOTBAR_MAX_VERTICES, DRAW_HINT_SPRITE);
+			Gfx_DrawVb_IndexedTris_Range(SURVIVAL_HUD_VERTICES, 16 + HOTBAR_MAX_VERTICES, DRAW_HINT_SPRITE);
 		}
 	}
 
@@ -1866,6 +1810,12 @@ static void InventoryScreen_GetTitleText(cc_string* desc, BlockID block, int cou
 	int block_ = block;
 	if (Game_PureClassic) { String_AppendConst(desc, "Select block"); return; }
 	if (block == BLOCK_AIR) return;
+
+	if (SurvivalItem_IsItem(block)) {
+		String_AppendConst(desc, SurvivalItem_Name(block));
+		if (Game_SurvivalMode && count > 1) String_Format1(desc, " x%i", &count);
+		return;
+	}
 
 	name = Block_UNSAFE_GetName(block);
 	String_AppendString(desc, &name);

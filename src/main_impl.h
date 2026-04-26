@@ -94,6 +94,13 @@ static void RunLauncher(void) {
 #endif
 }
 
+static void RunResourceBootstrap(void) {
+#if defined(CC_BUILD_CONSOLE) && defined(CC_BUILD_RESOURCES)
+	Launcher_ResourcesOnly = true;
+	RunLauncher();
+#endif
+}
+
 /* Shows a warning dialog due to an invalid command line argument */
 CC_NOINLINE static void WarnInvalidArg(const char* name, const cc_string* arg) {
 	cc_string tmp; char tmpBuffer[256];
@@ -180,6 +187,7 @@ cc_string args[GAME_MAX_CMDARGS];
 	if (argsCount == 0) {
 		Options_Get(LOPT_USERNAME, &Game_Username, DEFAULT_USERNAME);
 		Game_ShowMainMenu = true;
+		RunResourceBootstrap();
 		return ARG_RESULT_RUN_GAME;
 	}
 

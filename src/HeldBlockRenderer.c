@@ -9,14 +9,23 @@
 #include "Entity.h"
 #include "Model.h"
 #include "Options.h"
+#include "Gui.h"
+#include "SurvivalItems.h"
+#include "TexturePack.h"
+#include "Bitmap.h"
+#include "Stream.h"
+#include "String_.h"
 
 cc_bool HeldBlockRenderer_Show;
 #if CC_BUILD_FPU_MODE >= CC_FPU_MODE_REDUCED
 static BlockID held_block;
 static struct Entity held_entity;
 static struct Matrix held_blockProj;
+static GfxResourceID held_itemVB;
+static struct Bitmap held_itemsBmp;
+static cc_bool held_itemsBmpTried;
 
-static cc_bool held_animating, held_breaking, held_swinging;
+static cc_bool held_animating, held_breaking, held_swinging, held_continuousMining;
 static float held_swingY;
 static float held_time, held_period = 0.25f;
 static BlockID held_lastBlock;
@@ -57,7 +66,7 @@ static void HeldBlockRenderer_RenderModel(void) {
 	/* Gfx_SetDepthWrite(false); */
 	/* TODO: Need to properly reallocate per model VB here */
 
-	if (Blocks.Draw[held_block] == DRAW_GAS) {
+	if (SurvivalItem_IsItem(held_block) || Blocks.Draw[held_block] == DRAW_GAS) {
 		model = Entities.CurPlayer->Base.Model;
 		SetHeldModel(model);
 		Vec3_Set(held_entity.ModelScale, 1.0f, 1.0f, 1.0f);
@@ -78,6 +87,240 @@ static void HeldBlockRenderer_RenderModel(void) {
 	Gfx_SetDepthTest(true);
 	/* Gfx_SetDepthWrite(true); */
 	Gfx_SetFaceCulling(false);
+}
+
+#define HELD_ITEM_TILE_SIZE    16
+#define HELD_ITEM_MAX_VERTICES (HELD_ITEM_TILE_SIZE * HELD_ITEM_TILE_SIZE * 24)
+
+static cc_bool HeldItem_LoadBitmapPath(const cc_string* path) {
+	cc_filepath fp;
+	struct Stream stream;
+	cc_result res;
+
+	Platform_EncodePath(&fp, path);
+	res = Stream_OpenPath(&stream, &fp);
+	if (res) return false;
+
+	res = Png_Decode(&held_itemsBmp, &stream);
+	stream.Close(&stream);
+	return res == 0 && held_itemsBmp.scan0;
+}
+
+static cc_bool HeldItem_EnsureBitmap(void) {
+	static const cc_string mainPath = String_FromConst("texpacks/default/items.png");
+	static const cc_string preloadPath = String_FromConst("src/preload/texpacks/default/items.png");
+
+	if (held_itemsBmp.scan0) return true;
+	if (held_itemsBmpTried) return false;
+
+	held_itemsBmpTried = true;
+	if (HeldItem_LoadBitmapPath(&mainPath)) return true;
+	if (HeldItem_LoadBitmapPath(&preloadPath)) return true;
+	return false;
+}
+
+static cc_bool HeldItem_IsOpaque(int srcX, int srcY) {
+	BitmapCol col;
+	if (srcX < 0 || srcY < 0 || srcX >= held_itemsBmp.width || srcY >= held_itemsBmp.height) return false;
+
+	col = Bitmap_GetPixel(&held_itemsBmp, srcX, srcY);
+	return BitmapCol_A(col) >= 128;
+}
+
+static Vec3 HeldItem_Point(float x, float y, float z, const Vec3* origin) {
+	Vec3 v = Vec3_Create3(x, y, z);
+
+	v = Vec3_RotateZ(v, -42.0f * MATH_DEG2RAD);
+	v = Vec3_RotateY(v, -24.0f * MATH_DEG2RAD);
+	v = Vec3_RotateX(v,  12.0f * MATH_DEG2RAD);
+	Vec3_AddBy(&v, origin);
+	return v;
+}
+
+static void HeldItem_SetVertex(struct VertexTextured* v, Vec3 pos, float u, float vv, PackedCol col) {
+	v->x = pos.x; v->y = pos.y; v->z = pos.z;
+	v->Col = col; v->U = u; v->V = vv;
+}
+
+static void HeldItem_AddQuad(struct VertexTextured** ptr, Vec3 a, Vec3 b, Vec3 c, Vec3 d,
+							 TextureRec uv, PackedCol col) {
+	struct VertexTextured* v = *ptr;
+
+	HeldItem_SetVertex(&v[0], a, uv.u1, uv.v1, col);
+	HeldItem_SetVertex(&v[1], b, uv.u2, uv.v1, col);
+	HeldItem_SetVertex(&v[2], c, uv.u2, uv.v2, col);
+	HeldItem_SetVertex(&v[3], d, uv.u1, uv.v2, col);
+	*ptr += 4;
+}
+
+static int HeldItem_CountVertices(int baseX, int baseY) {
+	int x, y, count;
+
+	count = 0;
+	for (y = 0; y < HELD_ITEM_TILE_SIZE; y++) {
+		for (x = 0; x < HELD_ITEM_TILE_SIZE; x++) {
+			if (!HeldItem_IsOpaque(baseX + x, baseY + y)) continue;
+
+			count += 8; /* front + back */
+			if (!HeldItem_IsOpaque(baseX + x - 1, baseY + y)) count += 4;
+			if (!HeldItem_IsOpaque(baseX + x + 1, baseY + y)) count += 4;
+			if (!HeldItem_IsOpaque(baseX + x, baseY + y - 1)) count += 4;
+			if (!HeldItem_IsOpaque(baseX + x, baseY + y + 1)) count += 4;
+		}
+	}
+	return count;
+}
+
+static void HeldItem_AddPixel(struct VertexTextured** ptr, int baseX, int baseY, int px, int py,
+							  const Vec3* origin, cc_bool frontOnly) {
+	TextureRec uv;
+	PackedCol frontCol, backCol, sideCol;
+	Vec3 a, b, c, d, e, f, g, h;
+	float x1, y1, x2, y2;
+	float z1, z2, size;
+	float invW, invH;
+
+	size = 0.045f;
+	z1   = -0.025f; z2 = 0.025f;
+	x1   = (px - 8) * size; x2 = x1 + size;
+	y2   = (8 - py) * size; y1 = y2 - size;
+	invW = 1.0f / held_itemsBmp.width; invH = 1.0f / held_itemsBmp.height;
+
+	uv.u1 = (baseX + px)       * invW; uv.v1 = (baseY + py)       * invH;
+	uv.u2 = (baseX + px + 1.0f) * invW; uv.v2 = (baseY + py + 1.0f) * invH;
+
+	a = HeldItem_Point(x1, y2, z1, origin);
+	b = HeldItem_Point(x2, y2, z1, origin);
+	c = HeldItem_Point(x2, y1, z1, origin);
+	d = HeldItem_Point(x1, y1, z1, origin);
+	e = HeldItem_Point(x1, y2, z2, origin);
+	f = HeldItem_Point(x2, y2, z2, origin);
+	g = HeldItem_Point(x2, y1, z2, origin);
+	h = HeldItem_Point(x1, y1, z2, origin);
+
+	frontCol = PACKEDCOL_WHITE;
+	backCol  = PackedCol_Make(150, 150, 150, 255);
+	sideCol  = PackedCol_Make(115, 115, 115, 255);
+
+	if (frontOnly) {
+		HeldItem_AddQuad(ptr, a, b, c, d, uv, frontCol);
+		return;
+	}
+
+	HeldItem_AddQuad(ptr, f, e, h, g, uv, backCol);
+	if (!HeldItem_IsOpaque(baseX + px - 1, baseY + py)) HeldItem_AddQuad(ptr, e, a, d, h, uv, sideCol);
+	if (!HeldItem_IsOpaque(baseX + px + 1, baseY + py)) HeldItem_AddQuad(ptr, b, f, g, c, uv, sideCol);
+	if (!HeldItem_IsOpaque(baseX + px, baseY + py - 1)) HeldItem_AddQuad(ptr, e, f, b, a, uv, sideCol);
+	if (!HeldItem_IsOpaque(baseX + px, baseY + py + 1)) HeldItem_AddQuad(ptr, d, c, g, h, uv, sideCol);
+}
+
+static void HeldBlockRenderer_RenderItemFlat(void) {
+	struct VertexTextured* v;
+	TextureLoc loc;
+	TextureRec uv;
+	Vec3 origin, a, b, c, d;
+	int col, row;
+	float size;
+
+	if (!Gui.ItemsTex) return;
+
+	loc = SurvivalItem_TextureLoc(held_block);
+	col = Atlas2D_TileX(loc);
+	row = Atlas2D_TileY(loc);
+
+	uv.u1 = col / 16.0f;       uv.v1 = row / 16.0f;
+	uv.u2 = (col + 1) / 16.0f; uv.v2 = (row + 1) / 16.0f;
+
+	if (!held_itemVB) held_itemVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, 4);
+
+	size     = 0.38f;
+	origin.x = held_entity.Position.x + 0.12f;
+	origin.y = held_entity.Position.y + 0.26f;
+	origin.z = held_entity.Position.z - 0.12f;
+
+	a = HeldItem_Point(-size,  size, 0.0f, &origin);
+	b = HeldItem_Point( size,  size, 0.0f, &origin);
+	c = HeldItem_Point( size, -size, 0.0f, &origin);
+	d = HeldItem_Point(-size, -size, 0.0f, &origin);
+
+	v = (struct VertexTextured*)Gfx_LockDynamicVb(held_itemVB, VERTEX_FORMAT_TEXTURED, 4);
+	HeldItem_SetVertex(&v[0], a, uv.u1, uv.v1, PACKEDCOL_WHITE);
+	HeldItem_SetVertex(&v[1], b, uv.u2, uv.v1, PACKEDCOL_WHITE);
+	HeldItem_SetVertex(&v[2], c, uv.u2, uv.v2, PACKEDCOL_WHITE);
+	HeldItem_SetVertex(&v[3], d, uv.u1, uv.v2, PACKEDCOL_WHITE);
+	Gfx_UnlockDynamicVb(held_itemVB);
+
+	Gfx_SetDepthTest(false);
+	Gfx_SetFaceCulling(false);
+	Gfx_SetAlphaTest(true);
+	Gfx_SetAlphaBlending(true);
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
+	Gfx_BindDynamicVb(held_itemVB);
+	Gfx_BindTexture(Gui.ItemsTex);
+	Gfx_DrawVb_IndexedTris(4);
+	Gfx_SetAlphaTest(false);
+	Gfx_SetAlphaBlending(false);
+	Gfx_SetDepthTest(true);
+}
+
+static void HeldBlockRenderer_RenderItem(void) {
+	struct VertexTextured* v, *ptr;
+	TextureLoc loc;
+	int col, row;
+	int baseX, baseY;
+	int x, y, count;
+	Vec3 origin;
+
+#ifdef CC_BUILD_3DS
+	HeldBlockRenderer_RenderItemFlat();
+	return;
+#endif
+
+	if (!Gui.ItemsTex || !HeldItem_EnsureBitmap()) return;
+	loc = SurvivalItem_TextureLoc(held_block);
+	col = Atlas2D_TileX(loc);
+	row = Atlas2D_TileY(loc);
+	baseX = col * HELD_ITEM_TILE_SIZE;
+	baseY = row * HELD_ITEM_TILE_SIZE;
+
+	count = HeldItem_CountVertices(baseX, baseY);
+	if (!count) return;
+
+	if (!held_itemVB) held_itemVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, HELD_ITEM_MAX_VERTICES);
+
+	origin.x = held_entity.Position.x + 0.12f;
+	origin.y = held_entity.Position.y + 0.26f;
+	origin.z = held_entity.Position.z - 0.12f;
+
+	v = (struct VertexTextured*)Gfx_LockDynamicVb(held_itemVB, VERTEX_FORMAT_TEXTURED, count);
+	ptr = v;
+	for (y = 0; y < HELD_ITEM_TILE_SIZE; y++) {
+		for (x = 0; x < HELD_ITEM_TILE_SIZE; x++) {
+			if (!HeldItem_IsOpaque(baseX + x, baseY + y)) continue;
+			HeldItem_AddPixel(&ptr, baseX, baseY, x, y, &origin, false);
+		}
+	}
+	for (y = 0; y < HELD_ITEM_TILE_SIZE; y++) {
+		for (x = 0; x < HELD_ITEM_TILE_SIZE; x++) {
+			if (!HeldItem_IsOpaque(baseX + x, baseY + y)) continue;
+			HeldItem_AddPixel(&ptr, baseX, baseY, x, y, &origin, true);
+		}
+	}
+	Gfx_UnlockDynamicVb(held_itemVB);
+
+	Gfx_SetDepthTest(false);
+	Gfx_SetFaceCulling(false);
+	Gfx_SetAlphaTest(true);
+	Gfx_SetAlphaBlending(true);
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
+	Gfx_BindDynamicVb(held_itemVB);
+	Gfx_BindTexture(Gui.ItemsTex);
+	Gfx_DrawVb_IndexedTris(count);
+	Gfx_SetAlphaTest(false);
+	Gfx_SetAlphaBlending(false);
+	Gfx_SetDepthTest(true);
 }
 
 static void SetMatrix(void) {
@@ -213,11 +456,27 @@ static PackedCol HeldBlockRenderer_GetCol(struct Entity* entity) {
 void HeldBlockRenderer_ClickAnim(cc_bool digging) {
 	/* TODO: timing still not quite right, rotate2 still not quite right */
 	HeldBlockRenderer_ResetAnim(true, digging ? 0.35 : 0.25);
+	held_continuousMining = false;
 	held_swinging  = false;
 	held_breaking  = digging;
 	held_animating = true;
 	/* Start place animation at bottom of cycle */
 	if (!digging) held_time = held_period / 2;
+}
+
+void HeldBlockRenderer_SetMining(cc_bool mining) {
+	if (!mining) {
+		held_continuousMining = false;
+		if (held_breaking) HeldBlockRenderer_ResetAnim(true, 0.25f);
+		return;
+	}
+
+	if (held_continuousMining && held_breaking && held_animating) return;
+	HeldBlockRenderer_ResetAnim(true, 0.35f);
+	held_continuousMining = true;
+	held_swinging  = false;
+	held_breaking  = true;
+	held_animating = true;
 }
 
 static void DoSwitchBlockAnim(void* obj) {
@@ -262,7 +521,11 @@ static void DoAnimation(float delta, float lastSwingY) {
 	
 	held_time += delta;
 	if (held_time > held_period) {
-		HeldBlockRenderer_ResetAnim(true, 0.25f);
+		if (held_continuousMining && held_breaking) {
+			held_time = Math_Mod1(held_time / held_period) * held_period;
+		} else {
+			HeldBlockRenderer_ResetAnim(true, 0.25f);
+		}
 	}
 }
 
@@ -283,7 +546,13 @@ void HeldBlockRenderer_Render(float delta) {
 	DoAnimation(delta, lastSwingY);
 	ApplyHandSway(delta);
 	SetBaseOffset();
-	if (!Camera.Active->isThirdPerson) HeldBlockRenderer_RenderModel();
+	if (!Camera.Active->isThirdPerson) {
+		if (SurvivalItem_IsItem(held_block)) {
+			HeldBlockRenderer_RenderItem();
+		} else {
+			HeldBlockRenderer_RenderModel();
+		}
+	}
 
 	Gfx.View = view;
 	Gfx_LoadMatrix(MATRIX_PROJ, &Gfx.Projection);
@@ -292,6 +561,13 @@ void HeldBlockRenderer_Render(float delta) {
 
 static void OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&held_entity.ModelVB);
+	Gfx_DeleteDynamicVb(&held_itemVB);
+}
+
+static void OnFree(void) {
+	OnContextLost(NULL);
+	Mem_Free(held_itemsBmp.scan0);
+	held_itemsBmp.scan0 = NULL;
 }
 
 static const struct EntityVTABLE heldEntity_VTABLE = {
@@ -313,11 +589,14 @@ static void OnInit(void) {
 }
 #else
 void HeldBlockRenderer_ClickAnim(cc_bool digging) { }
+void HeldBlockRenderer_SetMining(cc_bool mining) { }
 void HeldBlockRenderer_Render(float delta) { }
 
 static void OnInit(void) { }
+static void OnFree(void) { }
 #endif
 
 struct IGameComponent HeldBlockRenderer_Component = {
-	OnInit /* Init  */
+	OnInit, /* Init  */
+	OnFree  /* Free  */
 };

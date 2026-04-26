@@ -25,7 +25,7 @@
 #include "Gui.h"
 
 struct LScreen* Launcher_Active;
-cc_bool Launcher_ShouldStop, Launcher_ShouldUpdate;
+cc_bool Launcher_ShouldStop, Launcher_ResourcesOnly, Launcher_ShouldUpdate;
 static char hashBuffer[STRING_SIZE], userBuffer[STRING_SIZE];
 cc_string Launcher_AutoHash = String_FromArray(hashBuffer);
 cc_string Launcher_Username = String_FromArray(userBuffer);
@@ -272,11 +272,17 @@ void Launcher_Setup(void) {
 
 	if (Resources_MissingCount) {
 		CheckResourcesScreen_SetActive();
+	} else if (Launcher_ResourcesOnly) {
+		Launcher_ShouldStop = true;
 	} else {
 		MainScreen_SetActive();
 	}
 #else
-	MainScreen_SetActive();
+	if (Launcher_ResourcesOnly) {
+		Launcher_ShouldStop = true;
+	} else {
+		MainScreen_SetActive();
+	}
 #endif
 }
 
@@ -303,6 +309,7 @@ void Launcher_Finish(void) {
 
 	hasBitmappedFont    = false;
 	Launcher_ShouldStop = false;
+	Launcher_ResourcesOnly = false;
 
 #ifdef CC_BUILD_MOBILE
 	/* Reset components */

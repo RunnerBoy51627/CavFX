@@ -18,6 +18,7 @@
 #include "Server.h"
 #include "TexturePack.h"
 #include "InputHandler.h"
+#include "Stream.h"
 
 struct _GuiData Gui;
 struct Screen* Gui_Screens[GUI_MAX_SCREENS];
@@ -52,8 +53,8 @@ float Gui_Scale(float value) {
 }
 
 float Gui_GetHotbarScale(void) {
-#ifdef CC_BUILD_WII && CC_BUILD_GAMECUBE
-	return Gui_Scale(GetWindowScale() * Gui.RawHotbarScale);
+#if defined(CC_BUILD_WII) || defined(CC_BUILD_GAMECUBE)
+	return Gui_Scale(GetWindowScale() * Gui.RawHotbarScale * 1.2f);
 #else
 	return Gui_Scale(GetWindowScale() * Gui.RawHotbarScale * 1.3f);
 #endif
@@ -686,6 +687,31 @@ static void IconsPngProcess(struct Stream* stream, const cc_string* name) {
 }
 static struct TextureEntry icons_entry = { "icons.png", IconsPngProcess };
 
+static void ItemsPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&Gui.ItemsTex, stream, name, NULL, NULL);
+}
+static struct TextureEntry items_entry = { "items.png", ItemsPngProcess };
+
+static void TryLoadLooseItemsPng(const char* path) {
+	cc_string str = String_FromReadonly(path);
+	cc_filepath raw;
+	struct Stream stream;
+	cc_result res;
+
+	if (Gui.ItemsTex) return;
+	Platform_EncodePath(&raw, &str);
+	res = Stream_OpenPath(&stream, &raw);
+	if (res) return;
+
+	ItemsPngProcess(&stream, &str);
+	(void)stream.Close(&stream);
+}
+
+static void LoadLooseItemsPng(void) {
+	TryLoadLooseItemsPng("texpacks/default/items.png");
+	TryLoadLooseItemsPng("src/preload/texpacks/default/items.png");
+}
+
 static void TouchPngProcess(struct Stream* stream, const cc_string* name) {
 	if (!Gui.TouchUI) return;
 
@@ -728,6 +754,7 @@ static void OnContextLost(void* obj) {
 	Gfx_DeleteTexture(&Gui.GuiClassicTex);
 	Gfx_DeleteTexture(&Gui.IconsTex);
 	Gfx_DeleteTexture(&Gui.TouchTex);
+	Gfx_DeleteTexture(&Gui.ItemsTex);
 }
 
 static void OnInit(void) {
@@ -735,7 +762,9 @@ static void OnInit(void) {
 	TextureEntry_Register(&gui_entry);
 	TextureEntry_Register(&guiClassic_entry);
 	TextureEntry_Register(&icons_entry);
+	TextureEntry_Register(&items_entry);
 	TextureEntry_Register(&touch_entry);
+	LoadLooseItemsPng();
 
 	Event_Register_(&InputEvents.Wheel,   NULL, OnMouseWheel);
 	Event_Register_(&PointerEvents.Moved, NULL, OnPointerMove);

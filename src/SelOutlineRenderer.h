@@ -11,6 +11,7 @@ struct IGameComponent;
 extern struct IGameComponent SelOutlineRenderer_Component;
 
 void SelOutlineRenderer_Render(struct RayTracer* selected, cc_bool dirty);
+void SelOutlineRenderer_RenderBreaking(struct RayTracer* selected, float progress);
 
 CC_END_HEADER
 #endif

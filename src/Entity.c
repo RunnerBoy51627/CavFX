@@ -969,23 +969,12 @@ static void LocalPlayer_UpdateSprint(struct LocalPlayer* p, float delta, float x
 		LocalPlayer_UpdateSprintFov(false, delta);
 		return;
 	}
-	if (p->Stamina <= 5.0f) p->SprintExhausted = true;
-	if (p->SprintExhausted && p->Stamina >= 25.0f) p->SprintExhausted = false;
 
 	movingForward = zMoving < 0.0f;
 	canSprint     = e->OnGround || p->Sprinting;
-	p->Sprinting = p->SprintHeld && !p->Sneaking && movingForward && canSprint && !p->SprintExhausted && p->Stamina > 5.0f;
-	if (p->Sprinting) {
-		p->Stamina -= 25.0f * delta;
-		if (p->Stamina <= 5.0f) {
-			if (p->Stamina < 0.0f) p->Stamina = 0.0f;
-			p->SprintExhausted = true;
-			p->Sprinting = false;
-		}
-	} else if (p->Stamina < 100.0f) {
-		p->Stamina += 15.0f * delta;
-		if (p->Stamina > 100.0f) p->Stamina = 100.0f;
-	}
+	p->SprintExhausted = false;
+	p->Stamina = 100.0f;
+	p->Sprinting = p->SprintHeld && !p->Sneaking && movingForward && canSprint;
 	p->Hacks.BaseHorSpeed = p->Sprinting ? 1.45f : (p->Sneaking ? 0.35f : 1.0f);
 	LocalPlayer_UpdateSprintFov(p->Sprinting, delta);
 }

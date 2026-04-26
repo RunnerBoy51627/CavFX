@@ -5,6 +5,7 @@
 #include "Event.h"
 #include "Chat.h"
 #include "Protocol.h"
+#include "SurvivalItems.h"
 
 struct _InventoryData Inventory;
 
@@ -306,6 +307,13 @@ void Inventory_ResetMapping(void) {
 	for (slot = 0; slot < Array_Elems(Inventory.Map); slot++) {
 		Inventory.Map[slot] = DefaultMapping(slot);
 	}
+
+	if (Game_SurvivalMode) return;
+	Inventory.Map[200] = SURVIVAL_ITEM_WOOD_PICKAXE;
+	Inventory.Map[201] = SURVIVAL_ITEM_STONE_PICKAXE;
+	Inventory.Map[202] = SURVIVAL_ITEM_IRON_PICKAXE;
+	Inventory.Map[203] = SURVIVAL_ITEM_DIAMOND_PICKAXE;
+	Inventory.Map[204] = SURVIVAL_ITEM_GOLD_PICKAXE;
 }
 
 void Inventory_AddDefault(BlockID block) {

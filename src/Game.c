@@ -563,6 +563,7 @@ static void Render3DFrame(float delta, float t) {
 	EntityShadows_Render();
 	if (Game_SelectedPos.valid && !Game_HideGui) {
 		SelOutlineRenderer_Render(&Game_SelectedPos, true);
+		SelOutlineRenderer_RenderBreaking(&Game_SelectedPos, InputHandler_GetMiningProgress());
 	}
 
 	/* Render water over translucent blocks when under the water outside the map for proper alpha blending */
@@ -579,6 +580,7 @@ static void Render3DFrame(float delta, float t) {
 	/* is drawn without writing to the depth buffer */
 	if (Game_SelectedPos.valid && !Game_HideGui && Blocks.Draw[Game_SelectedPos.block] == DRAW_TRANSLUCENT) {
 		SelOutlineRenderer_Render(&Game_SelectedPos, false);
+		SelOutlineRenderer_RenderBreaking(&Game_SelectedPos, InputHandler_GetMiningProgress());
 	}
 
 	Selections_Render();

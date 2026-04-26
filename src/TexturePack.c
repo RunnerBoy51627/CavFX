@@ -66,6 +66,47 @@ struct _Atlas2DData Atlas2D;
 struct _Atlas1DData Atlas1D;
 int TexturePack_ReqID;
 
+#define BREAKING_TEX_BASE 240
+#define BREAKING_TEX_COUNT 10
+#define BREAKING_TEX_ALPHA 180
+#define BREAKING_BG_THRESHOLD 28
+
+static int Atlas_ColorDistance(BitmapCol a, BitmapCol b) {
+	int r = BitmapCol_R(a) - BitmapCol_R(b);
+	int g = BitmapCol_G(a) - BitmapCol_G(b);
+	int bDiff = BitmapCol_B(a) - BitmapCol_B(b);
+	return Math_AbsI(r) + Math_AbsI(g) + Math_AbsI(bDiff);
+}
+
+static void Atlas_MakeBreakTexturesTransparent(struct Bitmap* atlas) {
+	int tileSize = atlas->width / ATLAS2D_TILES_PER_ROW;
+	int i, x, y, tileX, tileY;
+
+	for (i = 0; i < BREAKING_TEX_COUNT; i++) {
+		int texLoc = BREAKING_TEX_BASE + i;
+		BitmapCol bg, col;
+
+		tileX = Atlas2D_TileX(texLoc) * tileSize;
+		tileY = Atlas2D_TileY(texLoc) * tileSize;
+		if (tileY + tileSize > atlas->height) return;
+
+		bg = Bitmap_GetPixel(atlas, tileX, tileY);
+		for (y = 0; y < tileSize; y++) {
+			BitmapCol* row = Bitmap_GetRow(atlas, tileY + y) + tileX;
+			for (x = 0; x < tileSize; x++) {
+				col = row[x];
+				if (!BitmapCol_A(col)) continue;
+
+				if (Atlas_ColorDistance(col, bg) <= BREAKING_BG_THRESHOLD) {
+					row[x] = BitmapCol_Make(BitmapCol_R(col), BitmapCol_G(col), BitmapCol_B(col), 0);
+				} else {
+					row[x] = BitmapCol_Make(BitmapCol_R(col), BitmapCol_G(col), BitmapCol_B(col), BREAKING_TEX_ALPHA);
+				}
+			}
+		}
+	}
+}
+
 TextureRec Atlas1D_TexRec(TextureLoc texLoc, int uCount, int* index) {
 	TextureRec rec;
 	int y  = Atlas1D_RowId(texLoc);
@@ -250,6 +291,7 @@ cc_bool Atlas_TryChange(struct Bitmap* atlas) {
 	Atlas1D_Free();
 	Atlas2D_Free();
 
+	Atlas_MakeBreakTexturesTransparent(atlas);
 	Atlas_Update(atlas);
 	Event_RaiseVoid(&TextureEvents.AtlasChanged);
 	return true;
@@ -490,6 +532,7 @@ static char texpackPathBuffer[FILENAME_SIZE];
 cc_string TexturePack_Url  = String_FromArray(textureUrlBuffer);
 cc_string TexturePack_Path = String_FromArray(texpackPathBuffer);
 cc_bool TexturePack_DefaultMissing;
+static cc_result looseTexpackResult;
 
 void TexturePack_SetDefault(const cc_string* texPack) {
 	TexturePack_Path.length = 0;
@@ -499,13 +542,18 @@ void TexturePack_SetDefault(const cc_string* texPack) {
 
 cc_result TexturePack_ExtractDefault(DefaultZipCallback callback, const char** default_path) {
 	cc_result res = ReturnCode_FileNotFound;
-	const char* defaults[3];
+	const char* defaults[4];
 	cc_string path;
 	int i;
 
 	defaults[0] = Game_Version.DefaultTexpack;
 	defaults[1] = "texpacks/default.zip";
-	defaults[2] = "texpacks/classicube.zip";
+#ifdef CC_BUILD_WEB
+	defaults[1] = "https://cavfx-55e2c.web.app/texpacks/default";
+#else
+	defaults[1] = "texpacks/default";
+#endif
+	defaults[3] = "texpacks/classicube.zip";
 
 	for (i = 0; i < Array_Elems(defaults); i++) 
 	{
@@ -600,6 +648,40 @@ static cc_result ExtractFromFile(const cc_string* path) {
 	return ERR_NOT_SUPPORTED;
 }
 #else
+static void ExtractLooseEntry(const cc_string* filename, void* obj, int isDirectory) {
+	struct Stream stream;
+	cc_filepath raw_path;
+	cc_string name;
+	cc_result res;
+
+	if (isDirectory || looseTexpackResult) return;
+
+	Platform_EncodePath(&raw_path, filename);
+	res = Stream_OpenPath(&stream, &raw_path);
+	if (res) { looseTexpackResult = res; return; }
+
+	name = *filename;
+	Utils_UNSAFE_GetFilename(&name);
+	Event_RaiseEntry(&TextureEvents.FileChanged, &stream, &name);
+	(void)stream.Close(&stream);
+}
+
+static cc_result ExtractFromDirectory(const cc_string* path) {
+	cc_result res;
+
+	Event_RaiseVoid(&TextureEvents.PackChanged);
+	if (Gfx.LostContext) {
+		needReload = true;
+		return 0;
+	}
+	needReload = false;
+
+	looseTexpackResult = 0;
+	res = Directory_Enum(path, NULL, ExtractLooseEntry);
+	if (res) return res;
+	return looseTexpackResult;
+}
+
 static cc_result ExtractFromFile(const cc_string* path) {
 	struct Stream stream;
 	cc_filepath raw_path;
@@ -607,7 +689,13 @@ static cc_result ExtractFromFile(const cc_string* path) {
 
 	Platform_EncodePath(&raw_path, path);
 	res = Stream_OpenPath(&stream, &raw_path);
-	if (res) { Logger_IOWarn2(res, "opening", &raw_path); return res; }
+	if (res) {
+		if (String_CaselessEqualsConst(path, "texpacks/default")) {
+			res = ExtractFromDirectory(path);
+			if (!res) return 0;
+		}
+		Logger_IOWarn2(res, "opening", &raw_path); return res;
+	}
 
 	res = ExtractFrom(&stream, path);
 	/* No point logging error for closing readonly file */

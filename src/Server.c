@@ -51,8 +51,12 @@ struct LanClient {
 	cc_bool active, gotLogin;
 	cc_uint8 read[LAN_BUFFER_SIZE];
 	int readLen, id, protocol;
+	cc_bool sendingMap;
+	cc_uint32 mapOffset;
 	cc_string name;
 	char nameBuffer[STRING_SIZE];
+	cc_string skin;
+	char skinBuffer[STRING_SIZE];
 	Vec3 pos;
 	float yaw, pitch;
 };
@@ -67,10 +71,13 @@ static cc_bool cavlan_isClient;
 static Vec3 cavlan_spawn;
 static float cavlan_spawnYaw, cavlan_spawnPitch;
 static cc_bool cavlan_hasSpawn;
+static char cavlan_lastName[STRING_SIZE];
+static char cavlan_lastSkin[STRING_SIZE];
 
 static void Lan_Tick(void);
 static void Lan_BroadcastBlock(int x, int y, int z, BlockID block);
 static void Lan_BroadcastHostPosition(void);
+static void Lan_BroadcastChat(const cc_string* text, struct LanClient* except);
 #ifndef CC_BUILD_WIN
 static cc_result Socket_Accept(cc_socket s, cc_socket* client) { (void)s; (void)client; return ERR_NOT_SUPPORTED; }
 #endif
@@ -85,6 +92,13 @@ static void Server_ResetState(void) {
 	Server.SupportsPartialMessages = false;
 	Server.SupportsFullCP437       = false;
 	Server.SupportsNotifyAction    = false;
+}
+
+static void CavLan_FormatChat(cc_string* dst, const cc_string* name, const cc_string* text) {
+	String_AppendConst(dst, "<");
+	String_AppendString(dst, name);
+	String_AppendConst(dst, "> ");
+	String_AppendString(dst, text);
 }
 
 void Server_RetrieveTexturePack(const cc_string* url) {
@@ -226,9 +240,8 @@ static void SPConnection_AddPart(const cc_string* text) {
 	Chat_Add(&tmp);
 }
 
-static void SPConnection_SendChat(const cc_string* text) {
+static void SPConnection_AddChatLocal(const cc_string* text) {
 	cc_string left, part;
-	if (!text->length) return;
 
 	sp_lastCol = '\0';
 	left = *text;
@@ -239,6 +252,21 @@ static void SPConnection_SendChat(const cc_string* text) {
 		left = String_UNSAFE_SubstringAt(&left, STRING_SIZE);
 	}
 	SPConnection_AddPart(&left);
+}
+
+static void SPConnection_SendChat(const cc_string* text) {
+	cc_string formatted; char formattedBuffer[STRING_SIZE * 2];
+	if (!text->length) return;
+
+	if (lan_hosting) {
+		String_InitArray(formatted, formattedBuffer);
+		CavLan_FormatChat(&formatted, &Game_Username, text);
+		SPConnection_AddChatLocal(&formatted);
+		Lan_BroadcastChat(&formatted, NULL);
+		return;
+	}
+
+	SPConnection_AddChatLocal(text);
 }
 
 static void SPConnection_SendBlock(int x, int y, int z, BlockID old, BlockID now) {
@@ -311,6 +339,71 @@ static int  CavLan_ReadS32(const cc_uint8* src) { return (int)Mem_ReadU32_BE(src
 static void CavLan_WriteS16(cc_uint8* dst, int value) { Mem_WriteU16_BE(dst, (cc_uint16)value); }
 static int  CavLan_ReadS16(const cc_uint8* src) { return (cc_int16)Mem_ReadU16_BE(src); }
 
+static void CavLan_GetLocalSkin(cc_string* skin, char skinBuffer[STRING_SIZE]) {
+	struct Entity* e = &Entities.CurPlayer->Base;
+	cc_string raw;
+	skin->buffer = skinBuffer;
+	skin->length = 0;
+	skin->capacity = STRING_SIZE;
+
+	if (e->SkinRaw[0]) {
+		raw = String_FromRawArray(e->SkinRaw);
+		String_Copy(skin, &raw);
+	}
+	if (!skin->length) String_Copy(skin, &Game_Username);
+}
+
+static int CavLan_WriteStringPair(cc_uint8* pkt, const cc_string* name, const cc_string* skin) {
+	int nameLen = min(name->length, STRING_SIZE);
+	int skinLen = min(skin->length, STRING_SIZE);
+	pkt[0] = (cc_uint8)nameLen;
+	pkt[1] = (cc_uint8)skinLen;
+	Mem_Copy(pkt + 2, name->buffer, nameLen);
+	Mem_Copy(pkt + 2 + nameLen, skin->buffer, skinLen);
+	return 2 + nameLen + skinLen;
+}
+
+static cc_bool CavLan_ReadStringPair(cc_uint8* data, cc_uint32 length, cc_string* name, cc_string* skin) {
+	int nameLen, skinLen;
+	if (length < 2) return false;
+
+	nameLen = data[0];
+	skinLen = data[1];
+	if (nameLen > STRING_SIZE || skinLen > STRING_SIZE) return false;
+	if (2 + nameLen + skinLen > (int)length) return false;
+
+	String_AppendAll(name, data + 2, nameLen);
+	String_AppendAll(skin, data + 2 + nameLen, skinLen);
+	String_UNSAFE_TrimEnd(name);
+	String_UNSAFE_TrimEnd(skin);
+	return true;
+}
+
+static void CavLan_ReadLegacyName(cc_uint8* data, cc_uint32 length, cc_string* name, cc_string* skin) {
+	int nameLen = min((int)length, STRING_SIZE);
+	String_AppendAll(name, data, nameLen);
+	String_UNSAFE_TrimEnd(name);
+	String_Copy(skin, name);
+}
+
+static void CavLan_FallbackPlayerInfo(EntityID id, cc_string* name, cc_string* skin) {
+	if (!name->length) {
+		String_AppendConst(name, "Player ");
+		String_AppendInt(name, id);
+	}
+	if (!skin->length) String_Copy(skin, name);
+}
+
+static cc_bool CavLan_LocalPlayerInfoChanged(const cc_string* name, const cc_string* skin) {
+	cc_string lastName = String_FromRawArray(cavlan_lastName);
+	cc_string lastSkin = String_FromRawArray(cavlan_lastSkin);
+	if (String_Equals(name, &lastName) && String_Equals(skin, &lastSkin)) return false;
+
+	String_CopyToRawArray(cavlan_lastName, name);
+	String_CopyToRawArray(cavlan_lastSkin, skin);
+	return true;
+}
+
 static void CavLan_SendGameStateTo(struct LanClient* c) {
 	struct HacksComp* hacks = &Entities.CurPlayer->Hacks;
 	cc_bool cheats = !Game_PureClassic && hacks->Enabled;
@@ -330,19 +423,19 @@ static void CavLan_SendGameStateTo(struct LanClient* c) {
 	CavLan_SendFrameClient(c, CAVLAN_GAME_STATE, pkt, sizeof(pkt));
 }
 
-static void CavLan_SendPlayerInfoTo(struct LanClient* c, EntityID id, const cc_string* name) {
-	cc_uint8 pkt[1 + STRING_SIZE];
-	int length = min(name->length, STRING_SIZE);
+static void CavLan_SendPlayerInfoTo(struct LanClient* c, EntityID id, const cc_string* name, const cc_string* skin) {
+	cc_uint8 pkt[1 + 2 + STRING_SIZE * 2];
+	int length;
 	pkt[0] = id;
-	Mem_Copy(pkt + 1, name->buffer, length);
+	length = CavLan_WriteStringPair(pkt + 1, name, skin);
 	CavLan_SendFrameClient(c, CAVLAN_PLAYER_INFO, pkt, 1 + length);
 }
 
-static void CavLan_BroadcastPlayerInfo(EntityID id, const cc_string* name, struct LanClient* except) {
+static void CavLan_BroadcastPlayerInfo(EntityID id, const cc_string* name, const cc_string* skin, struct LanClient* except) {
 	int i;
 	for (i = 0; i < LAN_MAX_CLIENTS; i++) {
 		if (&lan_clients[i] == except) continue;
-		if (lan_clients[i].active && lan_clients[i].gotLogin) CavLan_SendPlayerInfoTo(&lan_clients[i], id, name);
+		if (lan_clients[i].active && lan_clients[i].gotLogin) CavLan_SendPlayerInfoTo(&lan_clients[i], id, name, skin);
 	}
 }
 
@@ -353,6 +446,8 @@ static void Lan_CloseClient(struct LanClient* c) {
 	if (c->gotLogin && c->id >= 0 && c->id < MAX_NET_PLAYERS) Entities_Remove(c->id);
 	c->active   = false;
 	c->gotLogin = false;
+	c->sendingMap = false;
+	c->mapOffset  = 0;
 	c->readLen  = 0;
 }
 
@@ -434,7 +529,20 @@ static void Lan_BroadcastPickedItem(BlockID block, Vec3 pos, struct LanClient* e
 	}
 }
 
-static void CavLan_EnsureNetPlayer(EntityID id, const cc_string* name, Vec3 pos, float yaw, float pitch) {
+static void CavLan_SetNetPlayerInfo(EntityID id, const cc_string* name, const cc_string* skin) {
+	struct Entity* e;
+	static const cc_string group = String_FromConst("Players");
+	if (id >= MAX_NET_PLAYERS) return;
+
+	e = Entities.List[id];
+	if (!e) return;
+	Entity_SetSkin(e, skin);
+	Entity_SetName(e, name);
+	TabList_Set(id, name, name, &group, 0);
+	TabList_EntityLinked_Set(id);
+}
+
+static void CavLan_EnsureNetPlayer(EntityID id, const cc_string* name, const cc_string* skin, Vec3 pos, float yaw, float pitch) {
 	struct Entity* e;
 	struct LocationUpdate update;
 	static const cc_string group = String_FromConst("Players");
@@ -443,11 +551,13 @@ static void CavLan_EnsureNetPlayer(EntityID id, const cc_string* name, Vec3 pos,
 		e = &NetPlayers_List[id].Base;
 		NetPlayer_Init((struct NetPlayer*)e);
 		Entities.List[id] = e;
-		Entity_SetSkin(e, name);
+		Entity_SetSkin(e, skin);
 		Entity_SetName(e, name);
 		Event_RaiseInt(&EntityEvents.Added, id);
 		TabList_Set(id, name, name, &group, 0);
 		TabList_EntityLinked_Set(id);
+	} else {
+		CavLan_SetNetPlayerInfo(id, name, skin);
 	}
 
 	update.flags = LU_HAS_POS | LU_HAS_YAW | LU_HAS_PITCH | LU_POS_ABSOLUTE_INSTANT;
@@ -488,10 +598,9 @@ static void Lan_BroadcastChat(const cc_string* text, struct LanClient* except) {
 	}
 }
 
-static cc_bool Lan_SendMap(struct LanClient* c) {
+static cc_bool Lan_SendMapBegin(struct LanClient* c) {
 	struct LocalPlayer* p = Entities.CurPlayer;
 	cc_uint8 pkt[18];
-	cc_uint32 offset = 0, count;
 
 	Mem_WriteU16_BE(pkt + 0, World.Width);
 	Mem_WriteU16_BE(pkt + 2, World.Height);
@@ -502,14 +611,31 @@ static cc_bool Lan_SendMap(struct LanClient* c) {
 	Mem_WriteU16_BE(pkt + 14, (int)(p->Spawn.z * 32));
 	pkt[16] = Math_Deg2Packed(p->SpawnYaw);
 	pkt[17] = Math_Deg2Packed(p->SpawnPitch);
-	if (!CavLan_SendFrameClient(c, CAVLAN_MAP_BEGIN, pkt, sizeof(pkt))) return false;
+	c->mapOffset  = 0;
+	c->sendingMap = true;
+	return CavLan_SendFrameClient(c, CAVLAN_MAP_BEGIN, pkt, sizeof(pkt));
+}
 
-	while (offset < (cc_uint32)World.Volume) {
-		count = min(1024, (cc_uint32)World.Volume - offset);
-		if (!CavLan_SendFrameClient(c, CAVLAN_MAP_CHUNK, World.Blocks + offset, count)) return false;
-		offset += count;
+static cc_bool Lan_SendMapTick(struct LanClient* c) {
+	cc_uint32 count;
+	cc_bool writable;
+	cc_result res;
+	int chunks = 0;
+	if (!c->sendingMap) return true;
+
+	while (c->mapOffset < (cc_uint32)World.Volume && chunks < 8) {
+		res = Socket_Poll(c->socket, 0, SOCKET_POLL_WRITE, &writable);
+		if (res) return false;
+		if (!writable) return true;
+
+		count = min(1024, (cc_uint32)World.Volume - c->mapOffset);
+		if (!CavLan_SendFrameClient(c, CAVLAN_MAP_CHUNK, World.Blocks + c->mapOffset, count)) return false;
+		c->mapOffset += count;
+		chunks++;
 	}
+	if (c->mapOffset < (cc_uint32)World.Volume) return true;
 
+	c->sendingMap = false;
 	return CavLan_SendFrameClient(c, CAVLAN_MAP_END, NULL, 0);
 }
 
@@ -523,33 +649,26 @@ static int CavLan_FrameSize(const cc_uint8* data, int readLen) {
 
 static void Lan_HandleLogin(struct LanClient* c, cc_uint8* data) {
 	struct Entity* host = &Entities.CurPlayer->Base;
-	int i;
-	cc_string raw = String_Init((char*)data + 5, min(Mem_ReadU32_BE(data + 1), STRING_SIZE), STRING_SIZE);
+	cc_uint32 length = Mem_ReadU32_BE(data + 1);
 
 	c->name.length = 0;
-	String_UNSAFE_TrimEnd(&raw);
-	String_Copy(&c->name, &raw);
+	c->skin.length = 0;
+	if (!CavLan_ReadStringPair(data + 5, length, &c->name, &c->skin)) {
+		CavLan_ReadLegacyName(data + 5, length, &c->name, &c->skin);
+	}
+	CavLan_FallbackPlayerInfo((EntityID)c->id, &c->name, &c->skin);
+
 	c->pos   = host->Position;
 	c->yaw   = host->Yaw;
 	c->pitch = host->Pitch;
 	c->gotLogin = true;
-	CavLan_EnsureNetPlayer((EntityID)c->id, &c->name, c->pos, c->yaw, c->pitch);
+	CavLan_EnsureNetPlayer((EntityID)c->id, &c->name, &c->skin, c->pos, c->yaw, c->pitch);
 
 	CavLan_SendGameStateTo(c);
-	if (!Lan_SendMap(c)) {
+	if (!Lan_SendMapBegin(c)) {
 		Lan_CloseClient(c);
 		return;
 	}
-
-	CavLan_SendPlayerInfoTo(c, 0, &Game_Username);
-	CavLan_SendPositionTo(c, 0, host->Position, host->Yaw, host->Pitch);
-	for (i = 0; i < LAN_MAX_CLIENTS; i++) {
-		if (&lan_clients[i] == c) continue;
-		if (!lan_clients[i].active || !lan_clients[i].gotLogin) continue;
-		CavLan_SendPlayerInfoTo(c, (EntityID)lan_clients[i].id, &lan_clients[i].name);
-		CavLan_SendPositionTo(c, (EntityID)lan_clients[i].id, lan_clients[i].pos, lan_clients[i].yaw, lan_clients[i].pitch);
-	}
-	CavLan_BroadcastPlayerInfo((EntityID)c->id, &c->name, c);
 }
 
 static void Lan_HandleSetBlock(struct LanClient* c, cc_uint8* data) {
@@ -592,9 +711,34 @@ static void Lan_HandlePosition(struct LanClient* c, cc_uint8* data) {
 static void Lan_HandleChat(struct LanClient* c, cc_uint8* data) {
 	cc_uint32 length = Mem_ReadU32_BE(data + 1);
 	cc_string msg = String_Init((char*)data + 5, min(length, STRING_SIZE), STRING_SIZE);
+	cc_string formatted; char formattedBuffer[STRING_SIZE * 2];
 	String_UNSAFE_TrimEnd(&msg);
-	SPConnection_SendChat(&msg);
-	Lan_BroadcastChat(&msg, NULL);
+
+	String_InitArray(formatted, formattedBuffer);
+	CavLan_FormatChat(&formatted, &c->name, &msg);
+	SPConnection_AddChatLocal(&formatted);
+	Lan_BroadcastChat(&formatted, NULL);
+}
+
+static void Lan_HandlePlayerInfo(struct LanClient* c, cc_uint8* data) {
+	cc_uint32 length = Mem_ReadU32_BE(data + 1);
+	cc_string name, skin;
+	char nameBuffer[STRING_SIZE], skinBuffer[STRING_SIZE];
+	if (length < 1) return;
+
+	String_InitArray(name, nameBuffer);
+	String_InitArray(skin, skinBuffer);
+	if (!CavLan_ReadStringPair(data + 6, length - 1, &name, &skin)) {
+		CavLan_ReadLegacyName(data + 6, length - 1, &name, &skin);
+	}
+	CavLan_FallbackPlayerInfo((EntityID)c->id, &name, &skin);
+
+	c->name.length = 0;
+	c->skin.length = 0;
+	String_Copy(&c->name, &name);
+	String_Copy(&c->skin, &skin);
+	CavLan_SetNetPlayerInfo((EntityID)c->id, &c->name, &c->skin);
+	CavLan_BroadcastPlayerInfo((EntityID)c->id, &c->name, &c->skin, c);
 }
 
 static void Lan_HandleDroppedItem(struct LanClient* c, cc_uint8* data) {
@@ -623,8 +767,26 @@ static void Lan_HandlePacket(struct LanClient* c, cc_uint8* data) {
 	if (data[0] == CAVLAN_BLOCK)            { Lan_HandleSetBlock(c, data); return; }
 	if (data[0] == CAVLAN_POSITION)         { Lan_HandlePosition(c, data); return; }
 	if (data[0] == CAVLAN_CHAT)             { Lan_HandleChat(c, data); return; }
+	if (data[0] == CAVLAN_PLAYER_INFO)      { Lan_HandlePlayerInfo(c, data); return; }
 	if (data[0] == CAVLAN_DROPPED_ITEM)     { Lan_HandleDroppedItem(c, data); return; }
 	if (data[0] == CAVLAN_PICKED_ITEM)      { Lan_HandlePickedItem(c, data); return; }
+}
+
+static void Lan_SendPostMapInfo(struct LanClient* c) {
+	struct Entity* host = &Entities.CurPlayer->Base;
+	cc_string hostSkin; char hostSkinBuffer[STRING_SIZE];
+	int i;
+
+	CavLan_GetLocalSkin(&hostSkin, hostSkinBuffer);
+	CavLan_SendPlayerInfoTo(c, 0, &Game_Username, &hostSkin);
+	CavLan_SendPositionTo(c, 0, host->Position, host->Yaw, host->Pitch);
+	for (i = 0; i < LAN_MAX_CLIENTS; i++) {
+		if (&lan_clients[i] == c) continue;
+		if (!lan_clients[i].active || !lan_clients[i].gotLogin) continue;
+		CavLan_SendPlayerInfoTo(c, (EntityID)lan_clients[i].id, &lan_clients[i].name, &lan_clients[i].skin);
+		CavLan_SendPositionTo(c, (EntityID)lan_clients[i].id, lan_clients[i].pos, lan_clients[i].yaw, lan_clients[i].pitch);
+	}
+	CavLan_BroadcastPlayerInfo((EntityID)c->id, &c->name, &c->skin, c);
 }
 
 static void Lan_TickClient(struct LanClient* c) {
@@ -633,6 +795,11 @@ static void Lan_TickClient(struct LanClient* c) {
 	int size, remaining;
 
 	if (!c->active) return;
+	if (c->sendingMap) {
+		if (!Lan_SendMapTick(c)) { Lan_CloseClient(c); return; }
+		if (!c->sendingMap) Lan_SendPostMapInfo(c);
+	}
+
 	res = Socket_Read(c->socket, c->read + c->readLen, sizeof(c->read) - c->readLen, &read);
 	if (res == ReturnCode_SocketInProgess || res == ReturnCode_SocketWouldBlock) return;
 	if (res || !read) { Lan_CloseClient(c); return; }
@@ -674,10 +841,13 @@ static void Lan_AcceptPending(void) {
 		lan_clients[i].socket   = client;
 		lan_clients[i].active   = true;
 		lan_clients[i].gotLogin = false;
+		lan_clients[i].sendingMap = false;
+		lan_clients[i].mapOffset  = 0;
 		lan_clients[i].readLen  = 0;
 		lan_clients[i].id       = i + 1;
 		lan_clients[i].protocol = PROTOCOL_0030;
 		String_InitArray(lan_clients[i].name, lan_clients[i].nameBuffer);
+		String_InitArray(lan_clients[i].skin, lan_clients[i].skinBuffer);
 	}
 }
 
@@ -694,9 +864,15 @@ static void Lan_BroadcastHostPosition(void) {
 }
 
 static void Lan_Tick(void) {
+	cc_string skin; char skinBuffer[STRING_SIZE];
 	int i;
 	Lan_AcceptPending();
 	for (i = 0; i < LAN_MAX_CLIENTS; i++) Lan_TickClient(&lan_clients[i]);
+
+	CavLan_GetLocalSkin(&skin, skinBuffer);
+	if (CavLan_LocalPlayerInfoChanged(&Game_Username, &skin)) {
+		CavLan_BroadcastPlayerInfo(0, &Game_Username, &skin, NULL);
+	}
 }
 
 cc_bool Server_StartLAN(int port) {
@@ -712,6 +888,8 @@ cc_bool Server_StartLAN(int port) {
 	}
 	Socket_SetNonBlocking(lan_listen, true);
 	lan_hosting = true;
+	cavlan_lastName[0] = '\0';
+	cavlan_lastSkin[0] = '\0';
 	return true;
 #else
 	(void)port;
@@ -1055,11 +1233,17 @@ static void CavLanClient_FailConnect(cc_result result) {
 }
 
 static void CavLanClient_FinishConnect(void) {
-	cc_string hello = Game_Username;
+	cc_uint8 hello[2 + STRING_SIZE * 2];
+	cc_string skin; char skinBuffer[STRING_SIZE];
+	int length;
+
 	net_connecting = false;
 	timeSinceLast  = 0.0f;
 	net_readCurrent = net_readBuffer;
-	CavLan_SendFrame(net_socket, CAVLAN_HELLO, (cc_uint8*)hello.buffer, hello.length);
+	CavLan_GetLocalSkin(&skin, skinBuffer);
+	length = CavLan_WriteStringPair(hello, &Game_Username, &skin);
+	CavLan_LocalPlayerInfoChanged(&Game_Username, &skin);
+	CavLan_SendFrame(net_socket, CAVLAN_HELLO, hello, length);
 	Event_RaiseVoid(&NetEvents.Connected);
 	Event_RaiseFloat(&WorldEvents.Loading, 0.0f);
 }
@@ -1087,6 +1271,8 @@ static void CavLanClient_BeginConnect(void) {
 	int numValidAddrs;
 	cc_result res;
 	String_InitArray(title, titleBuffer);
+	cavlan_lastName[0] = '\0';
+	cavlan_lastSkin[0] = '\0';
 
 	res = Socket_ParseAddress(&Server.Address, Server.Port, addrs, &numValidAddrs);
 	if (res == ERR_INVALID_ARGUMENT) {
@@ -1146,6 +1332,7 @@ static void CavLanClient_HandleMapEnd(void) {
 	struct LocationUpdate spawn;
 	Vec3 pos;
 	static const cc_string hostName = String_FromConst("Host");
+	static const cc_string hostSkin = String_FromConst("Host");
 	if (!cavlan_blocks || cavlan_index != cavlan_volume) return;
 	World_SetNewMap(cavlan_blocks, cavlan_width, cavlan_height, cavlan_length);
 	cavlan_blocks = NULL;
@@ -1162,7 +1349,7 @@ static void CavLanClient_HandleMapEnd(void) {
 
 	host = &Entities.CurPlayer->Base;
 	pos  = host->Position;
-	CavLan_EnsureNetPlayer(0, &hostName, pos, host->Yaw, host->Pitch);
+	CavLan_EnsureNetPlayer(0, &hostName, &hostSkin, pos, host->Yaw, host->Pitch);
 }
 
 static void CavLanClient_HandleBlock(cc_uint8* data, cc_uint32 length) {
@@ -1224,30 +1411,26 @@ static void CavLanClient_HandleGameState(cc_uint8* data, cc_uint32 length) {
 
 static void CavLanClient_HandlePlayerInfo(cc_uint8* data, cc_uint32 length) {
 	struct Entity* local = &Entities.CurPlayer->Base;
-	cc_string name;
-	char nameBuffer[STRING_SIZE];
+	cc_string name, skin;
+	char nameBuffer[STRING_SIZE], skinBuffer[STRING_SIZE];
 	EntityID id;
-	int nameLen;
 
 	if (length < 1) return;
 	id = data[0];
 	if (id >= MAX_NET_PLAYERS) return;
 
 	String_InitArray(name, nameBuffer);
-	nameLen = min((int)length - 1, STRING_SIZE);
-	String_AppendAll(&name, data + 1, nameLen);
-	String_UNSAFE_TrimEnd(&name);
-	if (!name.length) {
-		String_AppendConst(&name, "Player ");
-		String_AppendInt(&name, id);
+	String_InitArray(skin, skinBuffer);
+	if (!CavLan_ReadStringPair(data + 1, length - 1, &name, &skin)) {
+		CavLan_ReadLegacyName(data + 1, length - 1, &name, &skin);
 	}
+	CavLan_FallbackPlayerInfo(id, &name, &skin);
 
 	if (Entities.List[id]) {
-		Entity_SetSkin(Entities.List[id], &name);
-		Entity_SetName(Entities.List[id], &name);
+		CavLan_SetNetPlayerInfo(id, &name, &skin);
 		return;
 	}
-	CavLan_EnsureNetPlayer(id, &name, local->Position, local->Yaw, local->Pitch);
+	CavLan_EnsureNetPlayer(id, &name, &skin, local->Position, local->Yaw, local->Pitch);
 }
 
 static void CavLanClient_HandleFrame(cc_uint8 type, cc_uint8* data, cc_uint32 length) {
@@ -1272,11 +1455,24 @@ static void CavLanClient_HandleFrame(cc_uint8 type, cc_uint8* data, cc_uint32 le
 		pitch = data[8] * (360.0f / 256.0f);
 		if (!Entities.List[id]) {
 			static const cc_string name = String_FromConst("Player");
-			CavLan_EnsureNetPlayer(id, &name, pos, yaw, pitch);
+			CavLan_EnsureNetPlayer(id, &name, &name, pos, yaw, pitch);
 		} else {
 			CavLan_UpdateNetPlayer(id, pos, yaw, pitch);
 		}
 	}
+}
+
+static void CavLanClient_SendPlayerInfo(void) {
+	cc_uint8 pkt[1 + 2 + STRING_SIZE * 2];
+	cc_string skin; char skinBuffer[STRING_SIZE];
+	int length;
+
+	CavLan_GetLocalSkin(&skin, skinBuffer);
+	if (!CavLan_LocalPlayerInfoChanged(&Game_Username, &skin)) return;
+
+	pkt[0] = 0;
+	length = CavLan_WriteStringPair(pkt + 1, &Game_Username, &skin);
+	CavLan_SendFrame(net_socket, CAVLAN_PLAYER_INFO, pkt, 1 + length);
 }
 
 static cc_bool CavLanClient_Tick(struct ScheduledTask2* task) {
@@ -1319,6 +1515,7 @@ static cc_bool CavLanClient_Tick(struct ScheduledTask2* task) {
 	if ((ticks++ % 3) == 0 && World.Loaded) {
 		struct Entity* e = &Entities.CurPlayer->Base;
 		cc_uint8 pkt[8];
+		CavLanClient_SendPlayerInfo();
 		Mem_WriteU16_BE(pkt + 0, (int)(e->Position.x * 32));
 		Mem_WriteU16_BE(pkt + 2, (int)(e->Position.y * 32) + 51);
 		Mem_WriteU16_BE(pkt + 4, (int)(e->Position.z * 32));

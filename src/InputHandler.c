@@ -25,11 +25,16 @@
 #include "Protocol.h"
 #include "AxisLinesRenderer.h"
 #include "Picking.h"
+#include "SurvivalItems.h"
 
 static cc_bool input_buttonsDown[3];
 static int input_pickingId = -1;
 static float input_deltaAcc;
 static float input_fovIndex = -1.0f;
+static cc_bool survival_mining;
+static IVec3 survival_minePos;
+static BlockID survival_mineBlock;
+static float survival_mineProgress;
 #ifdef CC_BUILD_WEB
 static cc_bool suppressEscape;
 #endif
@@ -53,16 +58,38 @@ static void PlayerInputPad(int port, int axis, struct LocalPlayer* p, float* xMo
 	}
 }
 
+static double lastPadForwardTap[MAX_LOCAL_PLAYERS];
+static cc_bool padForwardWasDown[MAX_LOCAL_PLAYERS];
+
 static void PlayerInputGamepad(struct LocalPlayer* p, float* xMoving, float* zMoving) {
 	int port;
+	cc_bool forwardDown;
+
 	for (port = 0; port < INPUT_MAX_GAMEPADS; port++)
 	{
-		/* In splitscreen mode, tie a controller to a specific player*/
 		if (Game_NumStates > 1 && p->index != port) continue;
-		
-		PlayerInputPad(port, PAD_AXIS_LEFT,  p, xMoving, zMoving);
+
+		PlayerInputPad(port, PAD_AXIS_LEFT, p, xMoving, zMoving);
 		PlayerInputPad(port, PAD_AXIS_RIGHT, p, xMoving, zMoving);
 	}
+
+	/* Double-flick forward to sprint */
+	forwardDown = *zMoving < -0.65f;
+
+	if (Game_SurvivalMode && Gui.InputGrab == NULL) {
+		if (forwardDown && !padForwardWasDown[p->index]) {
+			if (Game.Time - lastPadForwardTap[p->index] <= 0.30) {
+				p->SprintHeld = true;
+			}
+			lastPadForwardTap[p->index] = Game.Time;
+		}
+
+		if (!forwardDown && !p->SprintKeyDown) {
+			p->SprintHeld = false;
+		}
+	}
+
+	padForwardWasDown[p->index] = forwardDown;
 }
 static struct LocalPlayerInput gamepadInput = { PlayerInputGamepad };
 
@@ -409,18 +436,61 @@ static cc_bool InputHandler_SpawnDroppedItem(BlockID block, Vec3 pos, Vec3 vel) 
 	return true;
 }
 
-static void InputHandler_DeleteBlock(void) {
-	IVec3 pos;
+static void InputHandler_ClearMining(void) {
+	survival_mining = false;
+	survival_mineProgress = 0.0f;
+	survival_mineBlock = BLOCK_AIR;
+	HeldBlockRenderer_SetMining(false);
+}
+
+static float InputHandler_BlockBreakTime(BlockID block) {
+	if (Blocks.Draw[block] == DRAW_SPRITE) return 0.20f;
+	switch (block) {
+	case BLOCK_GRASS:
+	case BLOCK_DIRT:
+	case BLOCK_SAND:
+	case BLOCK_GRAVEL:
+	case BLOCK_SNOW:
+		return 0.55f;
+	case BLOCK_LEAVES:
+	case BLOCK_GLASS:
+		return 0.35f;
+	case BLOCK_LOG:
+	case BLOCK_WOOD:
+	case BLOCK_BOOKSHELF:
+	case BLOCK_CRATE:
+		return 1.15f;
+	case BLOCK_STONE:
+	case BLOCK_COBBLE:
+	case BLOCK_SANDSTONE:
+	case BLOCK_MOSSY_ROCKS:
+	case BLOCK_STONE_BRICK:
+	case BLOCK_PILLAR:
+		return 2.25f;
+	case BLOCK_COAL_ORE:
+	case BLOCK_IRON_ORE:
+	case BLOCK_GOLD_ORE:
+	case BLOCK_GOLD:
+	case BLOCK_IRON:
+		return 3.0f;
+	case BLOCK_OBSIDIAN:
+		return 8.0f;
+	default:
+		return 0.85f;
+	}
+}
+
+float InputHandler_GetMiningProgress(void) {
+	float breakTime;
+	if (!Game_SurvivalMode || !survival_mining || survival_mineBlock == BLOCK_AIR) return 0.0f;
+
+	breakTime = InputHandler_BlockBreakTime(survival_mineBlock);
+	if (breakTime <= 0.0f) return 1.0f;
+	return min(survival_mineProgress / breakTime, 1.0f);
+}
+
+static void InputHandler_DeleteBlockNow(IVec3 pos, BlockID old) {
 	Vec3 dropPos, dropVel;
-	BlockID old;
-	/* always play delete animations, even if we aren't deleting a block */
-	HeldBlockRenderer_ClickAnim(true);
-
-	pos = Game_SelectedPos.pos;
-	if (!Game_SelectedPos.valid || !World_Contains(pos.x, pos.y, pos.z)) return;
-
-	old = World_GetBlock(pos.x, pos.y, pos.z);
-	if (Blocks.Draw[old] == DRAW_GAS || !Blocks.CanDelete[old]) return;
 
 	Game_ChangeBlock(pos.x, pos.y, pos.z, BLOCK_AIR);
 	Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, BLOCK_AIR);
@@ -431,6 +501,51 @@ static void InputHandler_DeleteBlock(void) {
 	}
 }
 
+static void InputHandler_UpdateSurvivalMining(float delta) {
+	IVec3 pos = Game_SelectedPos.pos;
+	BlockID old;
+	float breakTime;
+
+	if (!Game_SelectedPos.valid || !World_Contains(pos.x, pos.y, pos.z)) {
+		InputHandler_ClearMining(); return;
+	}
+
+	old = World_GetBlock(pos.x, pos.y, pos.z);
+	if (Blocks.Draw[old] == DRAW_GAS || !Blocks.CanDelete[old]) {
+		InputHandler_ClearMining(); return;
+	}
+
+	if (!survival_mining || pos.x != survival_minePos.x || pos.y != survival_minePos.y || pos.z != survival_minePos.z || old != survival_mineBlock) {
+		HeldBlockRenderer_SetMining(false);
+		survival_mining = true;
+		survival_minePos = pos;
+		survival_mineBlock = old;
+		survival_mineProgress = 0.0f;
+	}
+	HeldBlockRenderer_SetMining(true);
+
+	survival_mineProgress += delta;
+	breakTime = InputHandler_BlockBreakTime(old);
+	if (survival_mineProgress < breakTime) return;
+
+	InputHandler_DeleteBlockNow(pos, old);
+	InputHandler_ClearMining();
+}
+
+static void InputHandler_DeleteBlock(void) {
+	IVec3 pos;
+	BlockID old;
+	/* always play delete animations, even if we aren't deleting a block */
+	HeldBlockRenderer_ClickAnim(true);
+
+	pos = Game_SelectedPos.pos;
+	if (!Game_SelectedPos.valid || !World_Contains(pos.x, pos.y, pos.z)) return;
+
+	old = World_GetBlock(pos.x, pos.y, pos.z);
+	if (Blocks.Draw[old] == DRAW_GAS || !Blocks.CanDelete[old]) return;
+	InputHandler_DeleteBlockNow(pos, old);
+}
+
 static void InputHandler_PlaceBlock(void) {
 	IVec3 pos;
 	BlockID old, block;
@@ -439,6 +554,7 @@ static void InputHandler_PlaceBlock(void) {
 
 	old   = World_GetBlock(pos.x, pos.y, pos.z);
 	block = Inventory_SelectedBlock;
+	if (SurvivalItem_IsItem(block)) return;
 	if (AutoRotate_Enabled) block = AutoRotate_RotateBlock(block);
 
 	if (Game_CanPick(old) || !Blocks.CanPlace[block]) return;
@@ -477,6 +593,21 @@ void InputHandler_Tick(float delta) {
 	input_deltaAcc += delta;
 	if (Gui.InputGrab) return;
 
+	left = input_buttonsDown[MOUSE_LEFT];
+#ifdef CC_BUILD_TOUCH
+	if (Input_TouchMode) {
+		left = (Input_HoldMode == INPUT_MODE_DELETE) && AnyBlockTouches();
+	}
+#endif
+
+	if (Game_SurvivalMode) {
+		if (left) {
+			InputHandler_UpdateSurvivalMining(delta);
+		} else {
+			InputHandler_ClearMining();
+		}
+	}
+
 	/* Only tick 4 times per second when held down */
 	if (input_deltaAcc < 0.2495f) return;
 	/* NOTE: 0.2495 is used instead of 0.25 to produce delta time */
@@ -503,11 +634,13 @@ void InputHandler_Tick(float delta) {
 		if (middle) MouseStateUpdate(MOUSE_MIDDLE, true);
 	}
 
-	if (left) {
+	if (left && !Game_SurvivalMode) {
 		InputHandler_DeleteBlock();
 	} else if (right) {
+		InputHandler_ClearMining();
 		InputHandler_PlaceBlock();
 	} else if (middle) {
+		InputHandler_ClearMining();
 		InputHandler_PickBlock();
 	}
 }
@@ -545,8 +678,9 @@ static void CheckBlockTap(int i) {
 	MouseStatePress(btn);
 
 	if (btn == MOUSE_LEFT) { 
-		InputHandler_DeleteBlock();
+		if (!Game_SurvivalMode) InputHandler_DeleteBlock();
 	} else { 
+		InputHandler_ClearMining();
 		InputHandler_PlaceBlock();
 	}
 	if (!pressed) MouseStateRelease(btn);
@@ -614,7 +748,7 @@ static cc_bool BindTriggered_DeleteBlock(int key, struct InputDevice* device) {
 	if (Gui.InputGrab) return false;
 	
 	MouseStatePress(MOUSE_LEFT);
-	InputHandler_DeleteBlock();
+	if (!Game_SurvivalMode) InputHandler_DeleteBlock();
 	return true;
 }
 
@@ -622,6 +756,7 @@ static cc_bool BindTriggered_PlaceBlock(int key, struct InputDevice* device) {
 	if (Gui.InputGrab) return false;
 	
 	MouseStatePress(MOUSE_RIGHT);
+	InputHandler_ClearMining();
 	InputHandler_PlaceBlock();
 	return true;
 }
@@ -630,12 +765,14 @@ static cc_bool BindTriggered_PickBlock(int key, struct InputDevice* device) {
 	if (Gui.InputGrab) return false;
 	
 	MouseStatePress(MOUSE_MIDDLE);
+	InputHandler_ClearMining();
 	InputHandler_PickBlock();
 	return true;
 }
 
 static void BindReleased_DeleteBlock(int key, struct InputDevice* device) {
 	MouseStateRelease(MOUSE_LEFT);
+	InputHandler_ClearMining();
 }
 
 static void BindReleased_PlaceBlock(int key, struct InputDevice* device) {

@@ -18,6 +18,8 @@ typedef void (*Launcher_WebErrorCallback)(struct HttpRequest* req);
 
 /* Whether at the next tick, the launcher window should proceed to exit its main loop */
 extern cc_bool Launcher_ShouldStop;
+/* Only show resource download/check screens, then return to the game. */
+extern cc_bool Launcher_ResourcesOnly;
 /* Whether game should be updated on exit */
 extern cc_bool Launcher_ShouldUpdate;
 /* (optional) Hash of the server the game should automatically try to connect to after signing in */
