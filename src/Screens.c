@@ -1972,8 +1972,9 @@ static void InventoryScreen_Free(void* screen) {
 	if (Game_SurvivalMode) Inventory_ReturnCrafting();
 	if (Game_SurvivalMode && s->heldBlock != BLOCK_AIR && s->heldCount) {
 		if (!Inventory_TryAddCount(s->heldBlock, s->heldCount)) {
-			while (s->heldCount) {
-				struct LocalPlayer* p = Entities.CurPlayer;
+			struct LocalPlayer* p = Entities.CurPlayer;
+			int safety = INVENTORY_MAX_STACK;
+			while (s->heldCount && safety-- > 0 && p) {
 				Vec3 pos, vel, dir;
 				dir = Vec3_GetDirVector(p->Base.Yaw * MATH_DEG2RAD, p->Base.Pitch * MATH_DEG2RAD);
 				pos = Entity_GetEyePosition(&p->Base);
@@ -2119,7 +2120,9 @@ static void InventoryScreen_ChangedSlots(struct InventoryScreen* s) {
 }
 
 static cc_bool InventoryScreen_MoveCraftToHeld(struct InventoryScreen* s, int slot, int amount) {
-	BlockID block = Inventory.Craft[slot];
+	BlockID block;
+	if (slot < 0 || slot >= INVENTORY_CRAFTING_GRID) return false;
+	block = Inventory.Craft[slot];
 	if (block == BLOCK_AIR || !Inventory.CraftCounts[slot]) return true;
 	amount = min(amount, Inventory.CraftCounts[slot]);
 	if (!InventoryScreen_CanHold(s, block, amount)) return false;
@@ -2132,6 +2135,7 @@ static cc_bool InventoryScreen_MoveCraftToHeld(struct InventoryScreen* s, int sl
 }
 
 static cc_bool InventoryScreen_PlaceHeldInCraft(struct InventoryScreen* s, int slot, int amount) {
+	if (slot < 0 || slot >= INVENTORY_CRAFTING_GRID) return false;
 	if (s->heldBlock == BLOCK_AIR || !s->heldCount) return true;
 	if (Inventory.Craft[slot] != BLOCK_AIR && Inventory.Craft[slot] != s->heldBlock) return false;
 	if (Inventory.CraftCounts[slot] >= INVENTORY_MAX_STACK) return false;

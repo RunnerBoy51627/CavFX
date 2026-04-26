@@ -499,7 +499,8 @@ void Entity_LerpAngles(struct Entity* e, float t) {
 *#########################################################################################################################*/
 struct _EntitiesData Entities;
 
-#define DROPPED_ITEMS_FIRST (MAX_NET_PLAYERS + MAX_LOCAL_PLAYERS)
+#define MOBS_FIRST (MAX_NET_PLAYERS + MAX_LOCAL_PLAYERS)
+#define DROPPED_ITEMS_FIRST (MOBS_FIRST + MAX_MOBS)
 #define DROPPED_ITEM_PICKUP_DELAY 0.5f
 #define DROPPED_ITEM_LIFETIME 300.0f
 #define DROPPED_ITEM_PICKUP_RADIUS 1.25f
@@ -677,9 +678,394 @@ cc_bool DroppedItem_RemoveNearest(BlockID block, Vec3 pos) {
 	return true;
 }
 
+
+
+/*########################################################################################################################*
+*-----------------------------------------------------Survival mobs-------------------------------------------------------*
+*#########################################################################################################################*/
+#define MOB_YAW_OFFSET          90.0f
+#define MOB_SPAWN_INTERVAL      10.0f
+#define MOB_MAX_ALIVE           10
+#define MOB_DESPAWN_RANGE       96.0f
+#define MOB_CHASE_RANGE         24.0f
+#define MOB_ATTACK_COOLDOWN     1.0f
+#define MOB_WANDER_SPEED        0.035f
+#define MOB_TURN_SPEED          0.14f
+#define MOB_CLOSE_STOP_SCALE    0.90f
+#define MOB_STUCK_JUMP_TIME     0.25f
+#define MOB_JUMP_COOLDOWN       0.35f
+
+#define MOB_KIND_ZOMBIE         0
+#define MOB_KIND_SKELETON       1
+#define MOB_KIND_CREEPER        2
+#define MOB_KIND_SPIDER         3
+
+struct Mob {
+	struct Entity Base;
+	struct CollisionsComp Collisions;
+	int EntityID;
+	int Kind;
+	int Health;
+	int Damage;
+	float Speed;
+	float AttackRange;
+	float AttackCooldown;
+	float WanderCooldown;
+	float StuckTimer;
+	float JumpCooldown;
+	Vec3 WanderDir;
+};
+static struct Mob Mobs[MAX_MOBS];
+static RNGState mob_rnd;
+static cc_bool mob_rndSeeded;
+static float mob_spawnTimer;
+
+static void LocalPlayer_Damage(struct LocalPlayer* p, int damage);
+static void Mob_Tick(struct Entity* e, float delta);
+
+static void Mob_SeedRandom(void) {
+	if (mob_rndSeeded) return;
+	Random_SeedFromCurrentTime(&mob_rnd);
+	mob_rndSeeded = true;
+}
+
+static void Mob_Despawn(struct Entity* e) {
+	DeleteSkin(e);
+	EntityNames_Delete(e);
+	if (e->Flags & ENTITY_FLAG_HAS_MODELVB) Gfx_DeleteDynamicVb(&e->ModelVB);
+}
+
+static void Mob_SetLocation(struct Entity* e, struct LocationUpdate* update) {
+	if (update->flags & LU_HAS_POS) e->Position = update->pos;
+	if (update->flags & LU_HAS_PITCH) e->Pitch = update->pitch;
+	if (update->flags & LU_HAS_YAW) {
+		e->Yaw  = update->yaw;
+		e->RotY = update->yaw;
+	}
+	if (update->flags & LU_HAS_ROTX) e->RotX = update->rotX;
+	if (update->flags & LU_HAS_ROTZ) e->RotZ = update->rotZ;
+}
+
+static void Mob_RenderModel(struct Entity* e, float delta, float t) {
+	AnimatedComp_GetCurrent(e, t);
+	Model_Render(e->Model, e);
+}
+
+static cc_bool Mob_ShouldRenderName(struct Entity* e) { return false; }
+
+static const struct EntityVTABLE mob_VTABLE = {
+	Mob_Tick,        Mob_Despawn,         Mob_SetLocation, Entity_GetColor,
+	Mob_RenderModel, Mob_ShouldRenderName
+};
+
+static void Mob_FaceDirection(struct Entity* e, const Vec3* dir) {
+	float yaw;
+	if (Math_AbsF(dir->x) < 0.0001f && Math_AbsF(dir->z) < 0.0001f) return;
+
+	/* ClassicalSharp heading convention, plus CavFX mob model forward-axis correction. */
+	yaw = (float)(Math_Atan2f(dir->x, dir->z) * MATH_RAD2DEG);
+	yaw += MOB_YAW_OFFSET;
+
+	/* Snap-turn like ClassicalSharp Survival. */
+	e->RotY  = yaw;
+	e->Yaw   = yaw;
+	e->Pitch = 0.0f;
+}
+
+static void Mob_MoveTowards(struct Mob* mob, const Vec3* dir, float speed) {
+	struct Entity* e = &mob->Base;
+	Vec3 move = *dir;
+	float lenSq, len;
+
+	move.y = 0.0f;
+	lenSq = Vec3_LengthSquared(&move);
+	if (lenSq <= 0.0001f) {
+		e->Velocity.x = 0.0f;
+		e->Velocity.z = 0.0f;
+		return;
+	}
+
+	len = Math_SqrtF(lenSq);
+	move.x /= len;
+	move.z /= len;
+	e->Velocity.x = move.x * speed;
+	e->Velocity.z = move.z * speed;
+	Mob_FaceDirection(e, &move);
+}
+
+static void Mob_Wander(struct Mob* mob, float delta) {
+	Mob_SeedRandom();
+	mob->WanderCooldown -= delta;
+	if (mob->WanderCooldown <= 0.0f) {
+		mob->WanderCooldown = 1.0f + Random_Float(&mob_rnd) * 2.0f;
+		mob->WanderDir.x = Random_Float(&mob_rnd) - 0.5f;
+		mob->WanderDir.y = 0.0f;
+		mob->WanderDir.z = Random_Float(&mob_rnd) - 0.5f;
+	}
+	Mob_MoveTowards(mob, &mob->WanderDir, MOB_WANDER_SPEED);
+}
+
+static void Mob_Tick(struct Entity* e, float delta) {
+	struct Mob* mob = (struct Mob*)e;
+	struct LocalPlayer* player = Entities.CurPlayer;
+	Vec3 oldPos, diff, chase;
+	float distSq, attackRange, movedX, movedZ, movedSq, intendedSq;
+	cc_bool hitWall, wantsMove;
+
+	if (!Game_SurvivalMode || !World.Loaded || !player) {
+		Entities_Remove(mob->EntityID);
+		return;
+	}
+
+	oldPos = e->Position;
+	if (mob->AttackCooldown > 0.0f) mob->AttackCooldown -= delta;
+	if (mob->JumpCooldown > 0.0f) mob->JumpCooldown -= delta;
+
+	Vec3_Sub(&diff, &player->Base.Position, &e->Position);
+	distSq = Vec3_LengthSquared(&diff);
+
+	if (distSq > MOB_DESPAWN_RANGE * MOB_DESPAWN_RANGE) {
+		Entities_Remove(mob->EntityID);
+		return;
+	}
+
+	if (distSq <= MOB_CHASE_RANGE * MOB_CHASE_RANGE) {
+		attackRange = mob->AttackRange;
+		chase = diff;
+		chase.y = 0.0f;
+
+		/* Stop trying to run through the player. This avoids close-range orbiting/jitter. */
+		if (distSq <= (attackRange * MOB_CLOSE_STOP_SCALE) * (attackRange * MOB_CLOSE_STOP_SCALE)) {
+			e->Velocity.x = 0.0f;
+			e->Velocity.z = 0.0f;
+			Mob_FaceDirection(e, &chase);
+		} else if (mob->Kind == MOB_KIND_SKELETON && distSq < 5.0f * 5.0f) {
+			chase.x = -chase.x;
+			chase.z = -chase.z;
+			Mob_MoveTowards(mob, &chase, mob->Speed * 0.80f);
+		} else {
+			Mob_MoveTowards(mob, &chase, mob->Speed);
+		}
+	} else {
+		Mob_Wander(mob, delta);
+	}
+
+	/* Keep mobs from sinking like bricks in water, but still let them fall normally on land. */
+	if (Entity_TouchesAnyWater(e)) {
+		e->Velocity.y -= 0.015f;
+		if (e->Velocity.y < -0.20f) e->Velocity.y = -0.20f;
+	} else {
+		e->Velocity.y -= 0.04f;
+		if (e->Velocity.y < -0.5f) e->Velocity.y = -0.5f;
+	}
+
+	intendedSq = e->Velocity.x * e->Velocity.x + e->Velocity.z * e->Velocity.z;
+	wantsMove  = intendedSq > 0.0001f;
+
+	Collisions_MoveAndWallSlide(&mob->Collisions);
+	Vec3_AddBy(&e->Position, &e->Velocity);
+
+	movedX  = e->Position.x - oldPos.x;
+	movedZ  = e->Position.z - oldPos.z;
+	movedSq = movedX * movedX + movedZ * movedZ;
+	hitWall = mob->Collisions.HitXMin || mob->Collisions.HitXMax || mob->Collisions.HitZMin || mob->Collisions.HitZMax;
+
+	/*
+	 * IMPORTANT: In CavFX/ClassiCube collision naming, HitYMax means the mob landed
+	 * on top of a block. HitYMin is head/ceiling collision. The old mob code used
+	 * HitYMin as ground, so the jump check almost never became true.
+	 */
+	if (mob->Collisions.HitYMax) e->OnGround = true;
+
+	if (wantsMove && movedSq < 0.000025f) mob->StuckTimer += delta;
+	else mob->StuckTimer = 0.0f;
+
+	/* Jump up one-block ledges instead of freezing at block edges. */
+	if ((hitWall || mob->StuckTimer >= MOB_STUCK_JUMP_TIME) && e->OnGround && mob->JumpCooldown <= 0.0f) {
+		e->Velocity.y = mob->Kind == MOB_KIND_SPIDER ? 0.50f : 0.42f;
+		mob->JumpCooldown = MOB_JUMP_COOLDOWN;
+		mob->StuckTimer = 0.0f;
+		e->OnGround = false;
+	} else {
+		if (mob->Collisions.HitXMin || mob->Collisions.HitXMax) e->Velocity.x = 0.0f;
+		if (mob->Collisions.HitZMin || mob->Collisions.HitZMax) e->Velocity.z = 0.0f;
+	}
+
+	/* Hit ceiling while moving up. */
+	if (mob->Collisions.HitYMin && e->Velocity.y > 0.0f) e->Velocity.y = 0.0f;
+	/* Landed on ground while falling. */
+	if (mob->Collisions.HitYMax && e->Velocity.y < 0.0f) e->Velocity.y = 0.0f;
+
+	AnimatedComp_Update(e, oldPos, e->Position, delta);
+
+	attackRange = mob->AttackRange;
+	if (distSq <= attackRange * attackRange && mob->AttackCooldown <= 0.0f) {
+		mob->AttackCooldown = MOB_ATTACK_COOLDOWN;
+		LocalPlayer_Damage(player, mob->Damage);
+	}
+}
+
+static int Mob_CountAlive(void) {
+	int i, count = 0;
+	for (i = 0; i < MAX_MOBS; i++) {
+		if (Mobs[i].EntityID >= MOBS_FIRST && Entities.List[Mobs[i].EntityID] == &Mobs[i].Base) count++;
+	}
+	return count;
+}
+
+static cc_bool Mob_SpawnCore(Vec3 pos, int kind) {
+	struct Mob* mob;
+	struct Entity* e;
+	cc_string model;
+	int i, raw;
+
+	for (i = 0; i < MAX_MOBS; i++) {
+		raw = MOBS_FIRST + i;
+		if (Entities.List[raw]) continue;
+
+		mob = &Mobs[i];
+		Mem_Set(mob, 0, sizeof(struct Mob));
+		e = &mob->Base;
+		Entity_Init(e);
+		e->VTABLE = &mob_VTABLE;
+		e->Flags |= ENTITY_FLAG_HAS_MODELVB;
+		e->ShouldRender = true;
+		e->Position = pos;
+		Vec3_Set(e->Velocity, 0.0f, 0.0f, 0.0f);
+
+		mob->Kind = kind;
+		mob->EntityID = raw;
+		mob->Health = 20;
+		mob->Damage = 2;
+		mob->Speed = 0.065f;
+		mob->AttackRange = 1.20f;
+		mob->WanderCooldown = 0.0f;
+		mob->StuckTimer = 0.0f;
+		mob->JumpCooldown = 0.0f;
+		Vec3_Set(mob->WanderDir, 0.0f, 0.0f, 1.0f);
+
+		if (kind == MOB_KIND_SKELETON) {
+			model = String_FromReadonly("skeleton");
+			mob->Speed = 0.060f;
+			mob->AttackRange = 1.35f;
+		} else if (kind == MOB_KIND_CREEPER) {
+			model = String_FromReadonly("creeper");
+			mob->Speed = 0.060f;
+			mob->Damage = 6;
+			mob->AttackRange = 1.60f;
+		} else if (kind == MOB_KIND_SPIDER) {
+			model = String_FromReadonly("spider");
+			mob->Health = 16;
+			mob->Speed = 0.085f;
+			mob->AttackRange = 1.30f;
+		} else {
+			model = String_FromReadonly("zombie");
+		}
+
+		Entity_SetModel(e, &model);
+		Entity_UpdateModelBounds(e);
+		e->Yaw = MOB_YAW_OFFSET;
+		e->RotY = MOB_YAW_OFFSET;
+
+		mob->Collisions.Entity = e;
+		/* Mobs should visibly jump ledges instead of silently step-sliding up them. */
+		mob->Collisions.StepSize = 0.0f;
+
+		Entities.List[raw] = e;
+		Event_RaiseInt(&EntityEvents.Added, raw);
+		return true;
+	}
+	return false;
+}
+
+cc_bool Mob_SpawnZombie(Vec3 pos)   { return Mob_SpawnCore(pos, MOB_KIND_ZOMBIE); }
+cc_bool Mob_SpawnSkeleton(Vec3 pos) { return Mob_SpawnCore(pos, MOB_KIND_SKELETON); }
+cc_bool Mob_SpawnCreeper(Vec3 pos)  { return Mob_SpawnCore(pos, MOB_KIND_CREEPER); }
+cc_bool Mob_SpawnSpider(Vec3 pos)   { return Mob_SpawnCore(pos, MOB_KIND_SPIDER); }
+
+cc_bool Mob_AttackClosest(float reach, int damage) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	struct Entity* e;
+	Vec3 eyePos, dir;
+	float t0, t1, bestDist;
+	int i, best = -1;
+
+	if (!Game_SurvivalMode || !p) return false;
+	eyePos = Entity_GetEyePosition(&p->Base);
+	dir = Vec3_GetDirVector(p->Base.Yaw * MATH_DEG2RAD, p->Base.Pitch * MATH_DEG2RAD);
+	bestDist = reach;
+
+	for (i = MOBS_FIRST; i < DROPPED_ITEMS_FIRST; i++) {
+		e = Entities.List[i];
+		if (!e) continue;
+		if (!Intersection_RayIntersectsRotatedBox(eyePos, dir, e, &t0, &t1)) continue;
+		if (t0 < 0.0f) t0 = t1;
+		if (t0 < 0.0f || t0 > bestDist) continue;
+		bestDist = t0;
+		best = i;
+	}
+	if (best < 0) return false;
+
+	{
+		struct Mob* mob = (struct Mob*)Entities.List[best];
+		Vec3 knock;
+		float lenSq, len;
+
+		mob->Health -= damage <= 0 ? 1 : damage;
+		Vec3_Sub(&knock, &mob->Base.Position, &p->Base.Position);
+		knock.y = 0.0f;
+		lenSq = Vec3_LengthSquared(&knock);
+		if (lenSq > 0.0001f) {
+			len = Math_SqrtF(lenSq);
+			mob->Base.Velocity.x += (knock.x / len) * 0.18f;
+			mob->Base.Velocity.z += (knock.z / len) * 0.18f;
+			mob->Base.Velocity.y += 0.10f;
+		}
+		if (mob->Health <= 0) Entities_Remove(best);
+	}
+	return true;
+}
+
+void Mob_ClearAll(void) {
+	int i;
+	for (i = MOBS_FIRST; i < DROPPED_ITEMS_FIRST; i++) Entities_Remove(i);
+}
+
+static void Mob_TryAutoSpawn(float delta) {
+	struct LocalPlayer* player = Entities.CurPlayer;
+	Vec3 pos;
+	float angle, radius;
+	int kind;
+
+	if (!Game_SurvivalMode || !World.Loaded || !player) {
+		mob_spawnTimer = 0.0f;
+		return;
+	}
+	if (Mob_CountAlive() >= MOB_MAX_ALIVE) return;
+
+	Mob_SeedRandom();
+	mob_spawnTimer += delta;
+	if (mob_spawnTimer < MOB_SPAWN_INTERVAL) return;
+	mob_spawnTimer = 0.0f;
+
+	angle  = Random_Float(&mob_rnd) * (float)(MATH_PI * 2.0);
+	radius = 12.0f + Random_Float(&mob_rnd) * 10.0f;
+	pos = player->Base.Position;
+	pos.x += Math_CosF(angle) * radius;
+	pos.z += Math_SinF(angle) * radius;
+	pos.y += 1.0f;
+
+	kind = (int)(Random_Float(&mob_rnd) * 4.0f);
+	if (kind == MOB_KIND_SKELETON) Mob_SpawnSkeleton(pos);
+	else if (kind == MOB_KIND_CREEPER) Mob_SpawnCreeper(pos);
+	else if (kind == MOB_KIND_SPIDER) Mob_SpawnSpider(pos);
+	else Mob_SpawnZombie(pos);
+}
+
 static cc_bool Entities_Tick(struct ScheduledTask2* task) {
 	int i;
 
+	Mob_TryAutoSpawn(task->interval);
 	for (i = 0; i < ENTITIES_MAX_COUNT; i++)
 	{
 		if (!Entities.List[i]) continue;
@@ -1138,6 +1524,7 @@ static void LocalPlayers_OnNewMap(void) {
 	{
 		LocalPlayer_OnNewMap(&LocalPlayer_Instances[i]);
 	}
+	Mob_ClearAll();
 	DroppedItem_ClearAll();
 }
 

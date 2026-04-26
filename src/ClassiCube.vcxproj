@@ -408,6 +408,7 @@
     <ClInclude Include="Model.h" />
     <ClInclude Include="Input.h" />
     <ClInclude Include="Menus.h" />
+    <ClInclude Include="OxygenSystem.h" />
     <ClInclude Include="Protocol.h" />
     <ClInclude Include="Physics.h" />
     <ClInclude Include="Inventory.h" />
@@ -613,6 +614,7 @@
     <ClCompile Include="Model.c" />
     <ClCompile Include="Menus.c" />
     <ClCompile Include="FancyLighting.c" />
+    <ClCompile Include="OxygenSystem.c" />
     <ClCompile Include="Platform_Windows.c" />
     <ClCompile Include="Protocol.c" />
     <ClCompile Include="Physics.c" />

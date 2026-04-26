@@ -363,6 +363,9 @@
     <ClInclude Include="_AudioBase.h">
       <Filter>Header Files\Audio</Filter>
     </ClInclude>
+    <ClInclude Include="OxygenSystem.h">
+      <Filter>Header Files\Game</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="String.c">
@@ -988,6 +991,9 @@
     </ClCompile>
     <ClCompile Include="..\third_party\bearssl\x509_minimal_full.c">
       <Filter>Source Files\BearSSL</Filter>
+    </ClCompile>
+    <ClCompile Include="OxygenSystem.c">
+      <Filter>Source Files\Game</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

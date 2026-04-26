@@ -394,8 +394,9 @@ void Window_Init(void) {
 
 	Input.Sources = INPUT_SOURCE_NORMAL;
 
-	DisplayInfo.ScaleX = emscripten_get_device_pixel_ratio();
-	DisplayInfo.ScaleY = DisplayInfo.ScaleX;
+	DisplayInfo.ScaleX = 1.0f;
+	DisplayInfo.ScaleY = 1.0f;
+
 	interop_AddClipboardListeners();
 
 	droid  = interop_IsAndroid();

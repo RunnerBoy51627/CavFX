@@ -943,6 +943,8 @@ static void TableWidget_UpdateCountTex(struct TableWidget* w, int raw, int count
 
 	w->countTexValue[raw] = count;
 	Gfx_DeleteTexture(&w->countTex[raw].ID);
+	/* 3DS survival inventory lockup fix: skip inventory-grid stack-count textures. */
+	if (Game_SurvivalMode) return;
 	if (!Game_SurvivalMode || count <= 1) return;
 
 	String_InitArray(str, strBuffer);
@@ -1097,13 +1099,7 @@ static int TableWidget_Render2(void* widget, int offset) {
 			Widgets_DrawSurvivalItem(w->blocks[i], x + cellSizeX / 2, y + cellSizeY / 2, size);
 		}
 
-		if (Game_SurvivalMode) {
-			raw = w->blockRawSlots[i];
-			if (raw < 0 || raw >= INVENTORY_SURVIVAL_SLOTS) continue;
-			if (Inventory.Counts[raw] <= 1) continue;
-			if (!TableWidget_GetCoords(w, i, &x, &y)) continue;
-			TableWidget_DrawCount(x, y, Inventory.Counts[raw]);
-		}
+		/* 3DS survival inventory lockup fix: skip custom inventory-grid stack-number drawing. */
 	}
 	return offset + TABLE_MAX_VERTICES;
 }

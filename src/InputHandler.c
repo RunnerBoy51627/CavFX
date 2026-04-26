@@ -35,6 +35,7 @@ static cc_bool survival_mining;
 static IVec3 survival_minePos;
 static BlockID survival_mineBlock;
 static float survival_mineProgress;
+static float survival_attackCooldown;
 #ifdef CC_BUILD_WEB
 static cc_bool suppressEscape;
 #endif
@@ -591,6 +592,7 @@ void InputHandler_Tick(float delta) {
 	cc_bool left, middle, right;
 	
 	input_deltaAcc += delta;
+	if (survival_attackCooldown > 0.0f) survival_attackCooldown -= delta;
 	if (Gui.InputGrab) return;
 
 	left = input_buttonsDown[MOUSE_LEFT];
@@ -602,7 +604,12 @@ void InputHandler_Tick(float delta) {
 
 	if (Game_SurvivalMode) {
 		if (left) {
-			InputHandler_UpdateSurvivalMining(delta);
+			if (survival_attackCooldown <= 0.0f && Mob_AttackClosest(Entities.CurPlayer->ReachDistance, 4)) {
+				survival_attackCooldown = 0.45f;
+				InputHandler_ClearMining();
+			} else {
+				InputHandler_UpdateSurvivalMining(delta);
+			}
 		} else {
 			InputHandler_ClearMining();
 		}
@@ -748,7 +755,15 @@ static cc_bool BindTriggered_DeleteBlock(int key, struct InputDevice* device) {
 	if (Gui.InputGrab) return false;
 	
 	MouseStatePress(MOUSE_LEFT);
-	if (!Game_SurvivalMode) InputHandler_DeleteBlock();
+	if (Game_SurvivalMode) {
+		if (Mob_AttackClosest(Entities.CurPlayer->ReachDistance, 4)) {
+			survival_attackCooldown = 0.45f;
+			InputHandler_ClearMining();
+			return true;
+		}
+	} else {
+		InputHandler_DeleteBlock();
+	}
 	return true;
 }
 

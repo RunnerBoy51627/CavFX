@@ -8,23 +8,15 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define GAME_MAX_CMDARGS 5
 #define GAME_APP_VER "0.0.1"
 #define GAME_API_VER 1
+#define GAME_PHASE "Alpha "
 
 #if defined CC_BUILD_WEB
-#define GAME_APP_ALT   "CavFX " GAME_APP_VER " web mobile"
-#define GAME_APP_NAME  "CavFX " GAME_APP_VER " web"
+#define GAME_APP_ALT   "CavFX " GAME_PHASE GAME_APP_VER " web mobile"
+#define GAME_APP_NAME  "CavFX " GAME_PHASE GAME_APP_VER " web"
 #define GAME_APP_TITLE "CavFX"
-#elseif defined CC_BUILD_WII
-#define GAME_APP_ALT   "CavFX " GAME_APP_VER " wii"
-#define GAME_APP_NAME  "CavFX " GAME_APP_VER " wii"
-#elseif defined CC_BUILD_GAMECUBE
-#define GAME_APP_ALT   "CavFX " GAME_APP_VER " gc"
-#define GAME_APP_NAME  "CavFX " GAME_APP_VER " gc"
-#elseif defined CC_BUILD_3DS
-#define GAME_APP_ALT   "CavFX " GAME_APP_VER " 3DS"
-#define GAME_APP_NAME  "CavFX " GAME_APP_VER " 3DS"
 #else
-#define GAME_APP_NAME  "CavFX " GAME_APP_VER
-#define GAME_APP_TITLE "CavFX " GAME_APP_VER
+#define GAME_APP_NAME  "CavFX " GAME_PHASE GAME_APP_VER
+#define GAME_APP_TITLE "CavFX " GAME_PHASE GAME_APP_VER
 #endif
 
 /* Max number of characters strings can have. */

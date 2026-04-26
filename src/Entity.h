@@ -24,11 +24,12 @@ extern struct IGameComponent Entities_Component;
 #define MAX_LOCAL_PLAYERS 1
 #endif
 #define MAX_NET_PLAYERS   255
+#define MAX_MOBS          16
 #define MAX_DROPPED_ITEMS 64
 
 /* Offset used to avoid floating point roundoff errors. */
 #define ENTITY_ADJUSTMENT 0.001f
-#define ENTITIES_MAX_COUNT (MAX_NET_PLAYERS + MAX_LOCAL_PLAYERS + MAX_DROPPED_ITEMS)
+#define ENTITIES_MAX_COUNT (MAX_NET_PLAYERS + MAX_LOCAL_PLAYERS + MAX_MOBS + MAX_DROPPED_ITEMS)
 #define ENTITIES_SELF_ID 255
 
 enum NameMode {
@@ -41,7 +42,7 @@ enum ShadowMode {
 };
 extern const char* const ShadowMode_Names[SHADOW_MODE_COUNT];
 
-enum EntityType { ENTITY_TYPE_NONE, ENTITY_TYPE_PLAYER };
+enum EntityType { ENTITY_TYPE_NONE, ENTITY_TYPE_PLAYER, ENTITY_TYPE_MOB };
 
 /* Which fields are included/valid in a LocationUpdate */
 #define LU_HAS_POS   0x01
@@ -196,6 +197,14 @@ cc_bool DroppedItem_Spawn(BlockID block);
 cc_bool DroppedItem_SpawnAt(BlockID block, Vec3 pos);
 cc_bool DroppedItem_SpawnAtVelocity(BlockID block, Vec3 pos, Vec3 vel);
 cc_bool DroppedItem_RemoveNearest(BlockID block, Vec3 pos);
+
+/* Survival mobs */
+cc_bool Mob_SpawnZombie(Vec3 pos);
+cc_bool Mob_SpawnSkeleton(Vec3 pos);
+cc_bool Mob_SpawnCreeper(Vec3 pos);
+cc_bool Mob_SpawnSpider(Vec3 pos);
+cc_bool Mob_AttackClosest(float reach, int damage);
+void Mob_ClearAll(void);
 
 #define TABLIST_MAX_NAMES 256
 /* Data for all entries in tab list */

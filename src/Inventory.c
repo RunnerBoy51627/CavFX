@@ -19,15 +19,20 @@ cc_bool Inventory_CheckChangeSelected(void) {
 
 void Inventory_SetSelectedIndex(int index) {
 	if (!Inventory_CheckChangeSelected()) return;
+	if (index < 0) index = 0;
+	if (index >= INVENTORY_BLOCKS_PER_HOTBAR) index = INVENTORY_BLOCKS_PER_HOTBAR - 1;
 	Inventory.SelectedIndex = index;
 	Event_RaiseVoid(&UserEvents.HeldBlockChanged);
 }
 
 void Inventory_SetSlot(int index, BlockID block, int count) {
+	if (index < 0 || index >= INVENTORY_BLOCKS_PER_HOTBAR) return;
 	Inventory_SetRawSlot(Inventory.Offset + index, block, count);
 }
 
 void Inventory_SetRawSlot(int raw, BlockID block, int count) {
+	if (raw < 0 || raw >= Array_Elems(Inventory.Table)) return;
+	if (Game_SurvivalMode && raw >= INVENTORY_SURVIVAL_SLOTS) return;
 	if (block == BLOCK_AIR || count <= 0) {
 		Inventory.Table[raw]  = BLOCK_AIR;
 		Inventory.Counts[raw] = 0;
@@ -250,16 +255,74 @@ static int Inventory_CraftingNonEmpty(void) {
 	return count;
 }
 
+static int Inventory_CraftCount(BlockID block) {
+	int i, count = 0;
+	for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
+		if (Inventory.Craft[i] != block) continue;
+		count += Inventory.CraftCounts[i];
+	}
+	return count;
+}
+
+static cc_bool Inventory_CraftHasOnly(BlockID blockA, BlockID blockB) {
+	int i;
+	for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
+		if (!Inventory.CraftCounts[i]) continue;
+		if (Inventory.Craft[i] == blockA || Inventory.Craft[i] == blockB) continue;
+		return false;
+	}
+	return true;
+}
+
 void Inventory_UpdateCrafting(void) {
 	int i, nonEmpty = Inventory_CraftingNonEmpty();
 	Inventory.CraftResult = BLOCK_AIR;
 	Inventory.CraftResultCount = 0;
 
-	if (nonEmpty != 1) return;
-	for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
-		if (Inventory.Craft[i] != BLOCK_LOG || !Inventory.CraftCounts[i]) continue;
-		Inventory.CraftResult = BLOCK_WOOD;
-		Inventory.CraftResultCount = 4;
+	/* 1 log -> 4 planks */
+	if (nonEmpty == 1) {
+		for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
+			if (Inventory.Craft[i] != BLOCK_LOG || !Inventory.CraftCounts[i]) continue;
+			Inventory.CraftResult = BLOCK_WOOD;
+			Inventory.CraftResultCount = 4;
+			return;
+		}
+	}
+
+	/*
+	 * CavFX currently has a 2x2 survival crafting grid.
+	 * These are simplified pickaxe recipes until a 3x3 crafting table exists.
+	 *
+	 * Wooden pickaxe: 4 wood
+	 * Stone pickaxe: 3 cobble + 1 wood
+	 * Iron pickaxe: 3 iron + 1 wood
+	 * Diamond pickaxe: 3 cyan + 1 wood
+	 */
+	if (Inventory_CraftCount(BLOCK_WOOD) >= 4 && Inventory_CraftHasOnly(BLOCK_WOOD, BLOCK_AIR)) {
+		Inventory.CraftResult = SURVIVAL_ITEM_WOOD_PICKAXE;
+		Inventory.CraftResultCount = 1;
+		return;
+	}
+
+	if (Inventory_CraftCount(BLOCK_COBBLE) >= 3 && Inventory_CraftCount(BLOCK_WOOD) >= 1 &&
+		Inventory_CraftHasOnly(BLOCK_COBBLE, BLOCK_WOOD)) {
+		Inventory.CraftResult = SURVIVAL_ITEM_STONE_PICKAXE;
+		Inventory.CraftResultCount = 1;
+		return;
+	}
+
+	if (Inventory_CraftCount(BLOCK_IRON) >= 3 && Inventory_CraftCount(BLOCK_WOOD) >= 1 &&
+		Inventory_CraftHasOnly(BLOCK_IRON, BLOCK_WOOD)) {
+		Inventory.CraftResult = SURVIVAL_ITEM_IRON_PICKAXE;
+		Inventory.CraftResultCount = 1;
+		return;
+	}
+
+	/* Placeholder diamond ingredient: Classic has no diamond block/item yet, so cyan is used for now. */
+	if (Inventory_CraftCount(BLOCK_CYAN) >= 3 && Inventory_CraftCount(BLOCK_WOOD) >= 1 &&
+		Inventory_CraftHasOnly(BLOCK_CYAN, BLOCK_WOOD)) {
+		Inventory.CraftResult = SURVIVAL_ITEM_DIAMOND_PICKAXE;
+		Inventory.CraftResultCount = 1;
 		return;
 	}
 }
@@ -312,8 +375,8 @@ void Inventory_ResetMapping(void) {
 	Inventory.Map[200] = SURVIVAL_ITEM_WOOD_PICKAXE;
 	Inventory.Map[201] = SURVIVAL_ITEM_STONE_PICKAXE;
 	Inventory.Map[202] = SURVIVAL_ITEM_IRON_PICKAXE;
-	Inventory.Map[203] = SURVIVAL_ITEM_DIAMOND_PICKAXE;
-	Inventory.Map[204] = SURVIVAL_ITEM_GOLD_PICKAXE;
+	Inventory.Map[203] = SURVIVAL_ITEM_GOLD_PICKAXE;
+	Inventory.Map[204] = SURVIVAL_ITEM_DIAMOND_PICKAXE;
 }
 
 void Inventory_AddDefault(BlockID block) {
@@ -343,12 +406,22 @@ void Inventory_Remove(BlockID block) {
 static void OnReset(void) {
 	Inventory_ResetMapping();
 	Inventory.CanChangeSelected = true;
+	if (Game_SurvivalMode) {
+		Inventory.Offset = 0;
+		if (Inventory.SelectedIndex < 0 || Inventory.SelectedIndex >= INVENTORY_BLOCKS_PER_HOTBAR) {
+			Inventory.SelectedIndex = 0;
+		}
+	}
 }
 
 static void OnInit(void) {
 	int i;
 	BlockID* inv = Inventory.Table;
 	OnReset();
+	Inventory.Offset = 0;
+	if (Inventory.SelectedIndex < 0 || Inventory.SelectedIndex >= INVENTORY_BLOCKS_PER_HOTBAR) {
+		Inventory.SelectedIndex = 0;
+	}
 	Inventory.BlocksPerRow = Game_Version.BlocksPerRow;
 	
 	for (i = 0; i < Array_Elems(Inventory.Table); i++) {
