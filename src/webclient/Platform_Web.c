@@ -471,14 +471,14 @@ extern void interop_DirectorySetWorking(const char* path);
 extern void interop_AsyncDownloadTexturePack(const char* path);
 
 EMSCRIPTEN_KEEPALIVE int main(int argc, char** argv) {
-    _argc = argc;
-    _argv = argv;
+	_argc = argc;
+	_argv = argv;
 
-    interop_FS_Init();
-    interop_DirectorySetWorking("/classicube");
+	interop_FS_Init();
+	interop_DirectorySetWorking("/classicube");
 
-    web_main();   // start immediately
-    return 0;
+	interop_AsyncDownloadTexturePack("texpacks/default.zip");
+	return 0;
 }
 
 extern void interop_LoadIndexedDB(void);

@@ -547,13 +547,9 @@ cc_result TexturePack_ExtractDefault(DefaultZipCallback callback, const char** d
 	int i;
 
 	defaults[0] = Game_Version.DefaultTexpack;
-	defaults[1] = "texpacks/default.zip";
-#ifdef CC_BUILD_WEB
-	defaults[1] = "https://cavfx-55e2c.web.app/texpacks/default";
-#else
-	defaults[1] = "texpacks/default";
-#endif
-	defaults[3] = "texpacks/classicube.zip";
+	defaults[1] = "/texpacks/default.zip";
+	defaults[1] = "/texpacks/default";
+	defaults[3] = "/texpacks/classicube.zip";
 
 	for (i = 0; i < Array_Elems(defaults); i++) 
 	{

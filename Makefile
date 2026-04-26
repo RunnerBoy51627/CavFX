@@ -61,7 +61,7 @@ ifeq ($(PLAT),web)
 	CC      = emcc
 	OEXT    = .html
 	CFLAGS  = -g
-	LDFLAGS = -g -s WASM=1 -s NO_EXIT_RUNTIME=1 -s ABORTING_MALLOC=0 -s ALLOW_MEMORY_GROWTH=1 -s TOTAL_STACK=256Kb --js-library $(SOURCE_DIR)/webclient/interop_web.js
+	LDFLAGS = -g -s WASM=1 -s NO_EXIT_RUNTIME=1 -s ABORTING_MALLOC=0 -s ALLOW_MEMORY_GROWTH=1 -s TOTAL_STACK=256Kb --js-library $(SOURCE_DIR)/webclient/interop_web.js --shell-file misc/web/cavfx_shell.html -s EXPORT_ES6=0 -s MODULARIZE=0 --preload-file src/preload@/
 	BUILD_DIR = build/web
 	BEARSSL = 0
 
