@@ -337,3 +337,20 @@ Desktop.ini
 # ========================
 __pycache__/
 *.pyc
+
+# CavFX generated builds
+CavFX.html
+CavFX.js
+CavFX.wasm
+CavFX.data
+CavFX-*.3dsx
+CavFX-*.cia
+ClassiCube-*.dol
+ClassiCube-*.elf
+
+# Firebase/generated web deploy files
+public/CavFX.html
+public/CavFX.js
+public/CavFX.wasm
+public/CavFX.data
+.firebase/

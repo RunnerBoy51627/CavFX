@@ -13,6 +13,15 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define GAME_APP_ALT   "CavFX " GAME_APP_VER " web mobile"
 #define GAME_APP_NAME  "CavFX " GAME_APP_VER " web"
 #define GAME_APP_TITLE "CavFX"
+#elseif defined CC_BUILD_WII
+#define GAME_APP_ALT   "CavFX " GAME_APP_VER " wii"
+#define GAME_APP_NAME  "CavFX " GAME_APP_VER " wii"
+#elseif defined CC_BUILD_GAMECUBE
+#define GAME_APP_ALT   "CavFX " GAME_APP_VER " gc"
+#define GAME_APP_NAME  "CavFX " GAME_APP_VER " gc"
+#elseif defined CC_BUILD_3DS
+#define GAME_APP_ALT   "CavFX " GAME_APP_VER " 3DS"
+#define GAME_APP_NAME  "CavFX " GAME_APP_VER " 3DS"
 #else
 #define GAME_APP_NAME  "CavFX " GAME_APP_VER
 #define GAME_APP_TITLE "CavFX " GAME_APP_VER
