@@ -1293,6 +1293,9 @@ static void LocalPlayer_DoRespawn(struct LocalPlayer* p);
 static void LocalPlayer_Heal(struct LocalPlayer* p) {
 	p->Health = 20;
 	p->Stamina = 100.0f;
+	p->Oxygen = 20.0f;
+	p->Underwater = false;
+	p->SurvivalOxygenCooldown = 0.0f;
 	p->Sprinting = false;
 	p->SprintHeld = false;
 	p->SprintKeyDown = false;
@@ -1365,6 +1368,46 @@ static void LocalPlayer_UpdateSprint(struct LocalPlayer* p, float delta, float x
 	LocalPlayer_UpdateSprintFov(p->Sprinting, delta);
 }
 
+
+static cc_bool LocalPlayer_IsHeadUnderwater(struct LocalPlayer* p) {
+	Vec3 eyePos = Entity_GetEyePosition(&p->Base);
+	IVec3 pos;
+	BlockID block;
+
+	IVec3_Floor(&pos, &eyePos);
+	block = World_SafeGetBlock(pos.x, pos.y, pos.z);
+	return Blocks.ExtendedCollide[block] == COLLIDE_WATER;
+}
+
+static void LocalPlayer_UpdateOxygen(struct LocalPlayer* p, float delta) {
+	if (!Game_SurvivalMode || !World.Loaded) {
+		p->Underwater = false;
+		p->Oxygen = 20.0f;
+		p->SurvivalOxygenCooldown = 0.0f;
+		return;
+	}
+
+	p->Underwater = LocalPlayer_IsHeadUnderwater(p);
+
+	if (p->SurvivalOxygenCooldown > 0.0f) {
+		p->SurvivalOxygenCooldown -= delta;
+		if (p->SurvivalOxygenCooldown < 0.0f) p->SurvivalOxygenCooldown = 0.0f;
+	}
+
+	if (p->Underwater) {
+		p->Oxygen -= delta;
+		if (p->Oxygen < 0.0f) p->Oxygen = 0.0f;
+
+		if (p->Oxygen <= 0.0f && p->SurvivalOxygenCooldown <= 0.0f) {
+			p->SurvivalOxygenCooldown = 1.0f;
+			LocalPlayer_Damage(p, 2);
+		}
+	} else {
+		p->Oxygen += delta * 4.0f;
+		if (p->Oxygen > 20.0f) p->Oxygen = 20.0f;
+	}
+}
+
 static void LocalPlayer_UpdateSurvival(struct LocalPlayer* p, float delta, cc_bool wasOnGround) {
 	struct Entity* e = &p->Base;
 	float fallSpeed;
@@ -1372,6 +1415,8 @@ static void LocalPlayer_UpdateSurvival(struct LocalPlayer* p, float delta, cc_bo
 	if (!Game_SurvivalMode || !World.Loaded) return;
 	if (p->SurvivalDamageCooldown > 0.0f) p->SurvivalDamageCooldown -= delta;
 	if (p->SurvivalLavaCooldown   > 0.0f) p->SurvivalLavaCooldown   -= delta;
+
+	LocalPlayer_UpdateOxygen(p, delta);
 
 	if (Entity_TouchesAnyLava(e) && p->SurvivalLavaCooldown <= 0.0f) {
 		p->SurvivalLavaCooldown = 0.75f;
@@ -1490,6 +1535,9 @@ void LocalPlayer_ResetJumpVelocity(struct LocalPlayer* p) {
 static void LocalPlayer_Reset(struct LocalPlayer* p) {
 	p->ReachDistance = 5.0f;
 	p->Stamina = 100.0f;
+	p->Oxygen = 20.0f;
+	p->Underwater = false;
+	p->SurvivalOxygenCooldown = 0.0f;
 	p->Sprinting = false;
 	p->SprintHeld = false;
 	p->SprintKeyDown = false;

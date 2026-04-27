@@ -267,7 +267,8 @@ struct LocalPlayer {
 	struct PhysicsComp Physics;
 	cc_bool _warnedRespawn, _warnedFly, _warnedNoclip, _warnedZoom;
 	int Health;
-	float SurvivalDamageCooldown, SurvivalLavaCooldown, Stamina;
+	float SurvivalDamageCooldown, SurvivalLavaCooldown, SurvivalOxygenCooldown, Oxygen, Stamina;
+	cc_bool Underwater;
 	cc_bool SprintHeld, Sprinting, SprintKeyDown, SprintExhausted, Sneaking;
 	cc_uint8 index;
 };

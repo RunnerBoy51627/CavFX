@@ -83,7 +83,7 @@ static struct HUDScreen {
 	cc_bool hacksChanged;
 	float lastSpeed;
 	int lastFov;
-	int lastHealth;
+	int lastHealth, lastOxygenBubbles;
 	int lastX, lastY, lastZ;
 	struct HotbarWidget hotbar;
 } HUDScreen_Instance CC_BIG_VAR;
@@ -93,8 +93,10 @@ static struct HUDScreen {
 /* [PREFIX] [(] [X] [,] [Y] [,] [Z] [)] */
 #define POSITION_HUD_CHARS (1 + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1)
 #define SURVIVAL_HEARTS 10
+#define SURVIVAL_OXYGEN_BUBBLES 10
 #define SURVIVAL_HEART_VERTICES (SURVIVAL_HEARTS * 2 * 4)
-#define SURVIVAL_HUD_VERTICES SURVIVAL_HEART_VERTICES
+#define SURVIVAL_OXYGEN_VERTICES (SURVIVAL_OXYGEN_BUBBLES * 4)
+#define SURVIVAL_HUD_VERTICES (SURVIVAL_HEART_VERTICES + SURVIVAL_OXYGEN_VERTICES)
 #define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 3 + HOTBAR_MAX_VERTICES + SURVIVAL_HUD_VERTICES + POSITION_HUD_CHARS * 4)
 
 static void HUDScreen_RemakeLine1(struct HUDScreen* s) {
@@ -182,6 +184,7 @@ static void HUDScreen_RemakeLine2(struct HUDScreen* s) {
 	if (Game_ClassicMode) {
 		TextWidget_SetConst(&s->line2, Game_Version.Name, &s->font);
 		s->lastHealth = Entities.CurPlayer->Health;
+		s->lastOxygenBubbles = (int)Math_Ceil(Entities.CurPlayer->Oxygen * 0.5f);
 		return;
 	}
 
@@ -362,8 +365,12 @@ static void HUDScreen_Update(void* screen, float delta) {
 
 	HUDScreen_UpdateFPS(s,          delta);
 	HotbarWidget_Update(&s->hotbar, delta);
-	if (Game_SurvivalMode && s->lastHealth != Entities.CurPlayer->Health) {
-		HUDScreen_RemakeLine2(s);
+	if (Game_SurvivalMode) {
+		int oxygenBubbles = (int)Math_Ceil(Entities.CurPlayer->Oxygen * 0.5f);
+		if (s->lastHealth != Entities.CurPlayer->Health || s->lastOxygenBubbles != oxygenBubbles) {
+			s->lastOxygenBubbles = oxygenBubbles;
+			HUDScreen_RemakeLine2(s);
+		}
 	}
 	if (Game_ClassicMode) return;
 
@@ -396,6 +403,57 @@ static void HUDScreen_BuildHeart(struct Texture* tex, struct VertexTextured** pt
 	tex->uv.u1 = iconX / 256.0f;
 	tex->uv.u2 = (iconX + 9) / 256.0f;
 	Gfx_Make2DQuad(tex, PACKEDCOL_WHITE, ptr);
+}
+
+static void HUDScreen_BuildOxygenIcon(struct Texture* tex, struct VertexTextured** ptr, int iconX, int iconY) {
+	/* icons.png is 256x256 here. Use a transparent area for empty bubbles,
+	   so the vertex count stays fixed and no old/garbage vertices render. */
+	tex->uv.u1 = iconX / 256.0f;
+	tex->uv.u2 = (iconX + 9) / 256.0f;
+	tex->uv.v1 = iconY / 64.0f;
+	tex->uv.v2 = (iconY + 9) / 64.0f;
+	Gfx_Make2DQuad(tex, PACKEDCOL_WHITE, ptr);
+}
+
+static void HUDScreen_BuildOxygenMesh(struct HUDScreen* s, struct VertexTextured** ptr) {
+	static struct Texture tex = { 0, Tex_Rect(0,0,9,9), Tex_UV(0.0f,0.0f,9/256.0f,9/64.0f) };
+	struct LocalPlayer* p = Entities.CurPlayer;
+	float scaleX = s->hotbar.scale * DisplayInfo.ScaleX;
+	float scaleY = s->hotbar.scale * DisplayInfo.ScaleY;
+	int sizeX  = Math_Ceil(9.0f * scaleX);
+	int sizeY  = Math_Ceil(9.0f * scaleY);
+	int stepX  = Math_Ceil(8.0f * scaleX);
+	int baseX, baseY, bubbles, i;
+
+	if (!p) return;
+
+	/* Only show while head is underwater, or while the air bar is refilling. */
+	if (!p->Underwater && p->Oxygen >= 20.0f) {
+		bubbles = 0;
+	} else {
+		bubbles = (int)Math_Ceil(p->Oxygen * 0.5f);
+		if (bubbles < 0) bubbles = 0;
+		if (bubbles > SURVIVAL_OXYGEN_BUBBLES) bubbles = SURVIVAL_OXYGEN_BUBBLES;
+	}
+
+	baseX = s->hotbar.x;
+	baseY = s->hotbar.y - (sizeY * 2) - Math_Ceil(6.0f * DisplayInfo.ScaleY);
+
+	tex.width  = sizeX;
+	tex.height = sizeY;
+
+	for (i = 0; i < SURVIVAL_OXYGEN_BUBBLES; i++) {
+		tex.x = baseX + i * stepX;
+		tex.y = baseY;
+
+		if (i < bubbles) {
+			/* Actual full bubble in your real icons.png atlas. */
+			HUDScreen_BuildOxygenIcon(&tex, ptr, 16, 18);
+		} else {
+			/* Transparent unused atlas area. Do NOT sample purple/armor tiles. */
+			HUDScreen_BuildOxygenIcon(&tex, ptr, 90, 54);
+		}
+	}
 }
 
 static void HUDScreen_BuildHealthMesh(struct HUDScreen* s, struct VertexTextured** ptr) {
@@ -447,6 +505,7 @@ static void HUDScreen_BuildMesh(void* screen) {
 
 	if (Game_SurvivalMode) {
 		HUDScreen_BuildHealthMesh(s, ptr);
+		HUDScreen_BuildOxygenMesh(s, ptr);
 	}
 
 	if (!Game_ClassicMode) 
