@@ -430,6 +430,7 @@
     <ClInclude Include="Stream.h" />
     <ClInclude Include="SystemFonts.h" />
     <ClInclude Include="TexturePack.h" />
+    <ClInclude Include="Updater.h" />
     <ClInclude Include="Utils.h" />
     <ClInclude Include="PackedCol.h" />
     <ClInclude Include="Funcs.h" />
@@ -640,6 +641,7 @@
     <ClCompile Include="SystemFonts.c" />
     <ClCompile Include="TexturePack.c" />
     <ClCompile Include="TouchUI.c" />
+    <ClCompile Include="Updater.c" />
     <ClCompile Include="Utils.c" />
     <ClCompile Include="Vectors.c" />
     <ClCompile Include="Vorbis.c" />

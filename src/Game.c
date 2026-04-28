@@ -41,6 +41,7 @@
 #include "SystemFonts.h"
 #include "Formats.h"
 #include "EntityRenderers.h"
+#include "Updater.h"
 
 struct _GameData Game;
 static cc_uint64 frameStart;
@@ -507,6 +508,8 @@ static void Game_Load(void) {
 		EnvRenderer_SetMode(EnvRenderer_Minimal | ENV_LEGACY);
 	if (Gfx.Limitations & GFX_LIMIT_MINIMAL)
 		EnvRenderer_SetMode(ENV_MINIMAL);
+
+	Updater_CheckOnStartup();
 
 	Server.BeginConnect();
 }

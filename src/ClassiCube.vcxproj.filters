@@ -366,6 +366,9 @@
     <ClInclude Include="OxygenSystem.h">
       <Filter>Header Files\Game</Filter>
     </ClInclude>
+    <ClInclude Include="Updater.h">
+      <Filter>Header Files\Game</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="String.c">
@@ -993,6 +996,9 @@
       <Filter>Source Files\BearSSL</Filter>
     </ClCompile>
     <ClCompile Include="OxygenSystem.c">
+      <Filter>Source Files\Game</Filter>
+    </ClCompile>
+    <ClCompile Include="Updater.c">
       <Filter>Source Files\Game</Filter>
     </ClCompile>
   </ItemGroup>

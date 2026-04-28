@@ -431,6 +431,39 @@ static cc_bool CheckIsFree(BlockID block) {
 	return true;
 }
 
+static int InputHandler_ToolTier(BlockID item) {
+	switch (item) {
+	case SURVIVAL_ITEM_WOOD_PICKAXE:    return 1;
+	case SURVIVAL_ITEM_STONE_PICKAXE:   return 2;
+	case SURVIVAL_ITEM_IRON_PICKAXE:    return 3;
+	case SURVIVAL_ITEM_GOLD_PICKAXE:    return 1;
+	case SURVIVAL_ITEM_DIAMOND_PICKAXE: return 4;
+	default: return 0;
+	}
+}
+
+static int InputHandler_BlockRequiredTier(BlockID block) {
+	switch (block) {
+	case BLOCK_STONE:
+	case BLOCK_COBBLE:
+	case BLOCK_COAL_ORE:
+		return 1;
+
+	case BLOCK_IRON_ORE:
+		return 2;
+
+	case BLOCK_GOLD_ORE:
+	case BLOCK_GOLD:
+		return 3;
+
+	case BLOCK_OBSIDIAN:
+		return 4;
+
+	default:
+		return 0;
+	}
+}
+
 static cc_bool InputHandler_SpawnDroppedItem(BlockID block, Vec3 pos, Vec3 vel) {
 	if (!DroppedItem_SpawnAtVelocity(block, pos, vel)) return false;
 	Server_SendDroppedItem(block, pos, vel);
@@ -442,6 +475,49 @@ static void InputHandler_ClearMining(void) {
 	survival_mineProgress = 0.0f;
 	survival_mineBlock = BLOCK_AIR;
 	HeldBlockRenderer_SetMining(false);
+}
+
+static cc_bool InputHandler_ShouldDropBlock(BlockID block) {
+	int required = InputHandler_BlockRequiredTier(block);
+	int heldTier = InputHandler_ToolTier(Inventory_SelectedBlock);
+
+	return heldTier >= required;
+}
+
+static int InputHandler_RequiredTier(BlockID block) {
+	switch (block) {
+	case BLOCK_STONE:
+	case BLOCK_COBBLE:
+	case BLOCK_COAL_ORE:
+		return 1;
+
+	case BLOCK_IRON_ORE:
+		return 2;
+
+	case BLOCK_GOLD_ORE:
+	case BLOCK_GOLD:
+		return 3;
+
+	case BLOCK_OBSIDIAN:
+		return 4;
+
+	default:
+		return 0;
+	}
+}
+
+static cc_bool InputHandler_CanHarvest(BlockID block) {
+	return InputHandler_ToolTier(Inventory_SelectedBlock) >= InputHandler_RequiredTier(block);
+}
+
+static BlockID InputHandler_GetSurvivalDrop(BlockID old) {
+	if (!InputHandler_CanHarvest(old)) return BLOCK_AIR;
+
+	switch (old) {
+	case BLOCK_GRASS: return BLOCK_DIRT;
+	case BLOCK_STONE: return BLOCK_COBBLE;
+	default: return old;
+	}
 }
 
 static float InputHandler_BlockBreakTime(BlockID block) {
@@ -492,14 +568,19 @@ float InputHandler_GetMiningProgress(void) {
 
 static void InputHandler_DeleteBlockNow(IVec3 pos, BlockID old) {
 	Vec3 dropPos, dropVel;
+	BlockID drop;
 
 	Game_ChangeBlock(pos.x, pos.y, pos.z, BLOCK_AIR);
 	Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, BLOCK_AIR);
-	if (Game_SurvivalMode) {
-		Vec3_Set(dropPos, pos.x + 0.5f, pos.y + 0.5f, pos.z + 0.5f);
-		Vec3_Set(dropVel, 0.0f, 0.12f, 0.0f);
-		if (!InputHandler_SpawnDroppedItem(old, dropPos, dropVel)) Chat_AddRaw("&cToo many dropped items");
-	}
+
+	if (!Game_SurvivalMode) return;
+
+	drop = InputHandler_GetSurvivalDrop(old);
+	if (drop == BLOCK_AIR) return;
+
+	Vec3_Set(dropPos, pos.x + 0.5f, pos.y + 0.5f, pos.z + 0.5f);
+	Vec3_Set(dropVel, 0.0f, 0.12f, 0.0f);
+	if (!InputHandler_SpawnDroppedItem(drop, dropPos, dropVel)) Chat_AddRaw("&cToo many dropped items");
 }
 
 static void InputHandler_UpdateSurvivalMining(float delta) {
