@@ -57,6 +57,7 @@ int     Game_FpsLimit, Game_Vertices;
 cc_bool Game_SimpleArmsAnim;
 static float gfx_minFrameMs;
 static cc_bool autoPause;
+static float cavfx_autoSaveTimer;
 
 cc_bool Game_ClassicMode, Game_ClassicHacks;
 cc_bool Game_AllowCustomBlocks;

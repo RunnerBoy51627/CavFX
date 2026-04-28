@@ -1,4 +1,15 @@
 #include "Server.h"
+/* CAVFX LAN discovery uses UDP broadcast on Windows. Non-Windows builds use safe stubs for now. */
+#ifdef CC_BUILD_WIN
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #include "String_.h"
 #include "BlockPhysics.h"
 #include "Game.h"
@@ -27,6 +38,10 @@
 #include "Input.h"
 #include "Errors.h"
 #include "Options.h"
+
+/* Entity.c owns the mob array. When a LAN client finishes downloading the map,
+ * ask Entity.c to resend all active mob snapshots so late joiners see them. */
+extern void Mob_SendAllSnapshots(void);
 #include "Utils.h"
 #include "ExtMath.h"
 
@@ -43,7 +58,8 @@ struct _ServerConnectionData Server;
 enum CavLanPacket {
 	CAVLAN_HELLO = 1, CAVLAN_MAP_BEGIN = 2, CAVLAN_MAP_CHUNK = 3, CAVLAN_MAP_END = 4,
 	CAVLAN_BLOCK = 5, CAVLAN_CHAT = 6, CAVLAN_POSITION = 7, CAVLAN_PLAYER_INFO = 8,
-	CAVLAN_GAME_STATE = 9, CAVLAN_DROPPED_ITEM = 10, CAVLAN_PICKED_ITEM = 11
+	CAVLAN_GAME_STATE = 9, CAVLAN_DROPPED_ITEM = 10, CAVLAN_PICKED_ITEM = 11,
+	CAVLAN_MOB_SNAPSHOT = 12, CAVLAN_MOB_REMOVE = 13
 };
 
 struct LanClient {
@@ -74,10 +90,33 @@ static cc_bool cavlan_hasSpawn;
 static char cavlan_lastName[STRING_SIZE];
 static char cavlan_lastSkin[STRING_SIZE];
 
+#define CAVLAN_DISCOVERY_PORT 25566
+#define CAVLAN_DISCOVERY_MAGIC "CAVFXLAN"
+
+struct LanDiscoveryEntry {
+	char name[64];
+	char address[64];
+	int port;
+	cc_int64 lastSeen;
+};
+static struct LanDiscoveryEntry lan_discovered[SERVER_LAN_DISCOVERY_MAX];
+static int lan_discovered_count;
+static cc_int64 lan_last_announce;
+
+#ifdef CC_BUILD_WIN
+static SOCKET lan_discovery_socket = INVALID_SOCKET;
+#else
+static int lan_discovery_socket = -1;
+#endif
+static cc_bool lan_discovery_open;
+
 static void Lan_Tick(void);
+static void Server_LANDiscoveryAnnounce(void);
 static void Lan_BroadcastBlock(int x, int y, int z, BlockID block);
 static void Lan_BroadcastHostPosition(void);
 static void Lan_BroadcastChat(const cc_string* text, struct LanClient* except);
+extern void Mob_SetSyncedState(EntityID id, cc_uint8 kind, Vec3 pos, Vec3 vel, float yaw, float pitch, int health);
+extern void Mob_RemoveSynced(EntityID id);
 #ifndef CC_BUILD_WIN
 static cc_result Socket_Accept(cc_socket s, cc_socket* client) { (void)s; (void)client; return ERR_NOT_SUPPORTED; }
 #endif
@@ -279,6 +318,7 @@ static void SPConnection_SendData(const cc_uint8* data, cc_uint32 len) { }
 static cc_bool SPConnection_Tick(struct ScheduledTask2* task) {
 	if (Server.Disconnected) return true;
 	Lan_Tick();
+	Server_LANDiscoveryTick();
 	/* 60 -> 20 ticks a second */
 	if ((ticks++ % 3) != 0)  return true;
 	
@@ -303,6 +343,167 @@ static void SPConnection_Init(void) {
 	Server.IsSinglePlayer          = true;
 }
 
+
+
+/*########################################################################################################################*
+*-----------------------------------------------------LAN discovery------------------------------------------------------*
+*#########################################################################################################################*/
+static int Server_LANDiscoveryStrLen(const char* s) {
+	int len = 0;
+	if (!s) return 0;
+	while (s[len]) len++;
+	return len;
+}
+
+static void Server_LANDiscoveryCopy(char* dst, int dstSize, const char* src) {
+	int len = Server_LANDiscoveryStrLen(src);
+	if (len >= dstSize) len = dstSize - 1;
+	if (len > 0) Mem_Copy(dst, src, len);
+	dst[len] = '\0';
+}
+
+static cc_bool Server_LANDiscoverySameAddress(const char* a, const char* b) {
+	return !strcmp(a, b);
+}
+
+static void Server_LANDiscoveryAddRaw(const char* name, const char* address, int port) {
+	int i;
+	cc_int64 now = Stopwatch_Measure();
+	if (!name || !name[0] || !address || !address[0] || !port) return;
+
+	for (i = 0; i < lan_discovered_count; i++) {
+		if (!Server_LANDiscoverySameAddress(lan_discovered[i].address, address)) continue;
+		lan_discovered[i].port     = port;
+		lan_discovered[i].lastSeen = now;
+		Server_LANDiscoveryCopy(lan_discovered[i].name, sizeof(lan_discovered[i].name), name);
+		return;
+	}
+
+	if (lan_discovered_count >= SERVER_LAN_DISCOVERY_MAX) return;
+	Server_LANDiscoveryCopy(lan_discovered[lan_discovered_count].name,    sizeof(lan_discovered[lan_discovered_count].name),    name);
+	Server_LANDiscoveryCopy(lan_discovered[lan_discovered_count].address, sizeof(lan_discovered[lan_discovered_count].address), address);
+	lan_discovered[lan_discovered_count].port     = port;
+	lan_discovered[lan_discovered_count].lastSeen = now;
+	lan_discovered_count++;
+}
+
+static void Server_LANDiscoveryParse(const char* msg, const char* address) {
+	char name[64];
+	int port, len;
+	const char *p, *sep;
+
+	/* Format: CAVFXLAN|1|World name|25565 */
+	if (!msg || strncmp(msg, CAVLAN_DISCOVERY_MAGIC "|", sizeof(CAVLAN_DISCOVERY_MAGIC)) != 0) return;
+	p = strchr(msg, '|'); if (!p) return; p++;
+	p = strchr(p,   '|'); if (!p) return; p++;
+
+	sep = strchr(p, '|');
+	if (!sep) return;
+	len = (int)(sep - p);
+	if (len <= 0) return;
+	if (len >= (int)sizeof(name)) len = sizeof(name) - 1;
+	Mem_Copy(name, p, len); name[len] = '\0';
+
+	port = atoi(sep + 1);
+	if (port <= 0 || port > 65535) port = 25565;
+	Server_LANDiscoveryAddRaw(name, address, port);
+}
+
+#ifdef CC_BUILD_WIN
+static void Server_LANDiscoveryOpen(void) {
+	u_long nonblocking = 1;
+	BOOL yes = TRUE;
+	struct sockaddr_in addr;
+	if (lan_discovery_open) return;
+
+	lan_discovery_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (lan_discovery_socket == INVALID_SOCKET) return;
+
+	setsockopt(lan_discovery_socket, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
+	setsockopt(lan_discovery_socket, SOL_SOCKET, SO_BROADCAST, (const char*)&yes, sizeof(yes));
+	ioctlsocket(lan_discovery_socket, FIONBIO, &nonblocking);
+
+	Mem_Set(&addr, 0, sizeof(addr));
+	addr.sin_family      = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	addr.sin_port        = htons(CAVLAN_DISCOVERY_PORT);
+
+	if (bind(lan_discovery_socket, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+		closesocket(lan_discovery_socket);
+		lan_discovery_socket = INVALID_SOCKET;
+		return;
+	}
+	lan_discovery_open = true;
+}
+
+static void Server_LANDiscoveryAnnounce(void) {
+	char msg[160];
+	struct sockaddr_in addr;
+	int len;
+	cc_int64 now;
+	if (!lan_hosting) return;
+
+	Server_LANDiscoveryOpen();
+	if (!lan_discovery_open) return;
+
+	now = Stopwatch_Measure();
+	if (lan_last_announce && Stopwatch_ElapsedMS(lan_last_announce, now) < 1500) return;
+	lan_last_announce = now;
+
+	len = sprintf(msg, CAVLAN_DISCOVERY_MAGIC "|1|%s|25565", "CavFX LAN World");
+	Mem_Set(&addr, 0, sizeof(addr));
+	addr.sin_family      = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+	addr.sin_port        = htons(CAVLAN_DISCOVERY_PORT);
+	sendto(lan_discovery_socket, msg, len, 0, (struct sockaddr*)&addr, sizeof(addr));
+}
+
+static void Server_LANDiscoveryReceive(void) {
+	char msg[256];
+	char addrRaw[64];
+	struct sockaddr_in from;
+	int fromLen, len;
+	const char* fromAddr;
+	if (!lan_discovery_open) return;
+
+	for (;;) {
+		fromLen = sizeof(from);
+		len = recvfrom(lan_discovery_socket, msg, sizeof(msg) - 1, 0, (struct sockaddr*)&from, &fromLen);
+		if (len <= 0) return;
+		msg[len] = '\0';
+		fromAddr = inet_ntoa(from.sin_addr);
+		Server_LANDiscoveryCopy(addrRaw, sizeof(addrRaw), fromAddr);
+		Server_LANDiscoveryParse(msg, addrRaw);
+	}
+}
+#else
+static void Server_LANDiscoveryOpen(void) { }
+static void Server_LANDiscoveryAnnounce(void) { }
+static void Server_LANDiscoveryReceive(void) { }
+#endif
+
+void Server_LANDiscoveryRefresh(void) {
+	lan_discovered_count = 0;
+	Server_LANDiscoveryOpen();
+	Server_LANDiscoveryTick();
+}
+
+void Server_LANDiscoveryTick(void) {
+	Server_LANDiscoveryOpen();
+	Server_LANDiscoveryAnnounce();
+	Server_LANDiscoveryReceive();
+}
+
+int Server_LANDiscoveryCount(void) { return lan_discovered_count; }
+const char* Server_LANDiscoveryName(int index) {
+	return (index >= 0 && index < lan_discovered_count) ? lan_discovered[index].name : "";
+}
+const char* Server_LANDiscoveryAddress(int index) {
+	return (index >= 0 && index < lan_discovered_count) ? lan_discovered[index].address : "";
+}
+int Server_LANDiscoveryPort(int index) {
+	return (index >= 0 && index < lan_discovered_count) ? lan_discovered[index].port : 25565;
+}
 
 /*########################################################################################################################*
 *--------------------------------------------------------LAN host---------------------------------------------------------*
@@ -442,6 +643,20 @@ static void CavLan_BroadcastPlayerInfo(EntityID id, const cc_string* name, const
 static void Lan_CloseClient(struct LanClient* c) {
 	if (!c->active) return;
 
+	if (c->gotLogin) {
+		cc_string msg;
+		char msgBuffer[STRING_SIZE];
+
+		String_InitArray(msg, msgBuffer);
+
+		String_AppendConst(&msg, "&e");
+		String_AppendString(&msg, &c->name);
+		String_AppendConst(&msg, " left the world");
+
+		SPConnection_AddChatLocal(&msg);
+		Lan_BroadcastChat(&msg, c);
+	}
+
 	Socket_Close(c->socket);
 	if (c->gotLogin && c->id >= 0 && c->id < MAX_NET_PLAYERS) Entities_Remove(c->id);
 	c->active   = false;
@@ -497,6 +712,69 @@ static void CavLan_WritePickedItem(cc_uint8* pkt, BlockID block, Vec3 pos) {
 static void CavLan_ReadPickedItem(cc_uint8* pkt, BlockID* block, Vec3* pos) {
 	*block = Mem_ReadU16_BE(pkt + 0);
 	Vec3_Set(*pos, CavLan_ReadS32(pkt + 2) / 4096.0f, CavLan_ReadS32(pkt + 6) / 4096.0f, CavLan_ReadS32(pkt + 10) / 4096.0f);
+}
+
+static void CavLan_WriteMobSnapshot(cc_uint8* pkt, EntityID id, cc_uint8 kind, Vec3 pos, Vec3 vel, float yaw, float pitch, int health) {
+	/* Mob entity IDs can be above 255, so keep them 16-bit over LAN. */
+	Mem_WriteU16_BE(pkt + 0, (cc_uint16)id);
+	pkt[2] = kind;
+	CavLan_WriteS32(pkt + 3,  (int)(pos.x * 4096.0f));
+	CavLan_WriteS32(pkt + 7,  (int)(pos.y * 4096.0f));
+	CavLan_WriteS32(pkt + 11, (int)(pos.z * 4096.0f));
+	CavLan_WriteS16(pkt + 15, (int)(vel.x * 4096.0f));
+	CavLan_WriteS16(pkt + 17, (int)(vel.y * 4096.0f));
+	CavLan_WriteS16(pkt + 19, (int)(vel.z * 4096.0f));
+	pkt[21] = Math_Deg2Packed(yaw);
+	pkt[22] = Math_Deg2Packed(pitch);
+	CavLan_WriteS16(pkt + 23, health);
+}
+
+static void CavLan_ReadMobSnapshot(cc_uint8* pkt, EntityID* id, cc_uint8* kind, Vec3* pos, Vec3* vel, float* yaw, float* pitch, int* health) {
+	*id   = (EntityID)Mem_ReadU16_BE(pkt + 0);
+	*kind = pkt[2];
+	Vec3_Set(*pos, CavLan_ReadS32(pkt + 3) / 4096.0f, CavLan_ReadS32(pkt + 7) / 4096.0f, CavLan_ReadS32(pkt + 11) / 4096.0f);
+	Vec3_Set(*vel, CavLan_ReadS16(pkt + 15) / 4096.0f, CavLan_ReadS16(pkt + 17) / 4096.0f, CavLan_ReadS16(pkt + 19) / 4096.0f);
+	*yaw    = pkt[21] * (360.0f / 256.0f);
+	*pitch  = pkt[22] * (360.0f / 256.0f);
+	*health = CavLan_ReadS16(pkt + 23);
+}
+
+static void CavLan_SendMobSnapshotTo(struct LanClient* c, EntityID id, cc_uint8 kind, Vec3 pos, Vec3 vel, float yaw, float pitch, int health) {
+	cc_uint8 pkt[25];
+	CavLan_WriteMobSnapshot(pkt, id, kind, pos, vel, yaw, pitch, health);
+	CavLan_SendFrameClient(c, CAVLAN_MOB_SNAPSHOT, pkt, sizeof(pkt));
+}
+
+static void Lan_BroadcastMobSnapshot(EntityID id, cc_uint8 kind, Vec3 pos, Vec3 vel, float yaw, float pitch, int health, struct LanClient* except) {
+	int i;
+	if (!lan_hosting) return;
+	for (i = 0; i < LAN_MAX_CLIENTS; i++) {
+		if (&lan_clients[i] == except) continue;
+		if (lan_clients[i].active && lan_clients[i].gotLogin) CavLan_SendMobSnapshotTo(&lan_clients[i], id, kind, pos, vel, yaw, pitch, health);
+	}
+}
+
+static void CavLan_SendMobRemoveTo(struct LanClient* c, EntityID id) {
+	cc_uint8 pkt[2];
+	Mem_WriteU16_BE(pkt + 0, (cc_uint16)id);
+	CavLan_SendFrameClient(c, CAVLAN_MOB_REMOVE, pkt, sizeof(pkt));
+}
+
+static void Lan_BroadcastMobRemove(EntityID id, struct LanClient* except) {
+	int i;
+	if (!lan_hosting) return;
+	for (i = 0; i < LAN_MAX_CLIENTS; i++) {
+		if (&lan_clients[i] == except) continue;
+		if (lan_clients[i].active && lan_clients[i].gotLogin) CavLan_SendMobRemoveTo(&lan_clients[i], id);
+	}
+}
+
+void Server_SendMobSnapshot(EntityID id, cc_uint8 kind, Vec3 pos, Vec3 vel, float yaw, float pitch, int health) {
+	Lan_BroadcastMobSnapshot(id, kind, pos, vel, yaw, pitch, health, NULL);
+}
+
+void Server_SendMobRemove(EntityID id) {
+	Lan_BroadcastMobRemove(id, NULL);
 }
 
 static void CavLan_SendDroppedItemTo(struct LanClient* c, BlockID block, Vec3 pos, Vec3 vel) {
@@ -662,6 +940,19 @@ static void Lan_HandleLogin(struct LanClient* c, cc_uint8* data) {
 	c->yaw   = host->Yaw;
 	c->pitch = host->Pitch;
 	c->gotLogin = true;
+	{
+		cc_string msg;
+		char msgBuffer[STRING_SIZE];
+
+		String_InitArray(msg, msgBuffer);
+
+		String_AppendConst(&msg, "&e");
+		String_AppendString(&msg, &c->name);
+		String_AppendConst(&msg, " joined the world");
+
+		SPConnection_AddChatLocal(&msg);
+		Lan_BroadcastChat(&msg, NULL);
+	}
 	CavLan_EnsureNetPlayer((EntityID)c->id, &c->name, &c->skin, c->pos, c->yaw, c->pitch);
 
 	CavLan_SendGameStateTo(c);
@@ -739,6 +1030,10 @@ static void Lan_HandlePlayerInfo(struct LanClient* c, cc_uint8* data) {
 	String_Copy(&c->skin, &skin);
 	CavLan_SetNetPlayerInfo((EntityID)c->id, &c->name, &c->skin);
 	CavLan_BroadcastPlayerInfo((EntityID)c->id, &c->name, &c->skin, c);
+
+	/* Late join fix: resend the host current mobs after the new client has the map.
+	 * Without this, host can see skeletons/zombies while the joined client sees none. */
+	Mob_SendAllSnapshots();
 }
 
 static void Lan_HandleDroppedItem(struct LanClient* c, cc_uint8* data) {
@@ -1095,6 +1390,10 @@ static void MPConnection_Disconnect(void) {
 	Game_Disconnect(&title, &reason);
 }
 
+void Server_LeaveLAN(void) {
+	MPConnection_Disconnect();
+}
+
 static void DisconnectReadFailed(cc_result res) {
 	cc_string msg; char msgBuffer[STRING_SIZE * 2];
 	String_InitArray(msg, msgBuffer);
@@ -1387,8 +1686,39 @@ static void CavLanClient_HandleGameState(cc_uint8* data, cc_uint32 length) {
 	if (length < 12) return;
 
 	Game_SurvivalMode = data[0] != 0;
-	Game_ClassicMode  = data[1] != 0;
+	Game_ClassicMode = data[1] != 0;
 	Game_ClassicHacks = data[2] != 0;
+
+	Options_SetBool(OPT_SURVIVAL_MODE, Game_SurvivalMode);
+
+	{
+		int i;
+
+		Inventory_ResetMapping();
+		Inventory.Offset = 0;
+
+		for (i = 0; i < Array_Elems(Inventory.Table); i++) {
+			Inventory.Table[i] = BLOCK_AIR;
+			Inventory.Counts[i] = 0;
+		}
+
+		for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
+			Inventory.Craft[i] = BLOCK_AIR;
+			Inventory.CraftCounts[i] = 0;
+		}
+
+		Inventory_UpdateCrafting();
+
+		if (!Game_SurvivalMode) {
+			for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
+				Inventory_Set(i, Game_Version.Hotbar[i]);
+			}
+		}
+
+		Inventory.SelectedIndex = 0;
+		Event_RaiseVoid(&UserEvents.HeldBlockChanged);
+	}
+
 	Game_AllowCustomBlocks   = !Game_ClassicMode && Options_GetBool(OPT_CUSTOM_BLOCKS,      true);
 	Game_SimpleArmsAnim      = !Game_ClassicMode && Options_GetBool(OPT_SIMPLE_ARMS_ANIM,   false);
 	Game_BreakableLiquids    = !Game_ClassicMode && Options_GetBool(OPT_MODIFIABLE_LIQUIDS, false);
@@ -1407,6 +1737,24 @@ static void CavLanClient_HandleGameState(cc_uint8* data, cc_uint32 length) {
 	HacksComp_Update(hacks);
 
 	Server.SupportsFullCP437 = !Game_ClassicMode;
+}
+
+
+static void CavLanClient_HandleMobSnapshot(cc_uint8* data, cc_uint32 length) {
+	EntityID id;
+	cc_uint8 kind;
+	Vec3 pos, vel;
+	float yaw, pitch;
+	int health;
+	if (length < 25) return;
+	CavLan_ReadMobSnapshot(data, &id, &kind, &pos, &vel, &yaw, &pitch, &health);
+	if (health <= 0) { Mob_RemoveSynced(id); return; }
+	Mob_SetSyncedState(id, kind, pos, vel, yaw, pitch, health);
+}
+
+static void CavLanClient_HandleMobRemove(cc_uint8* data, cc_uint32 length) {
+	if (length < 2) return;
+	Mob_RemoveSynced((EntityID)Mem_ReadU16_BE(data + 0));
 }
 
 static void CavLanClient_HandlePlayerInfo(cc_uint8* data, cc_uint32 length) {
@@ -1441,6 +1789,8 @@ static void CavLanClient_HandleFrame(cc_uint8 type, cc_uint8* data, cc_uint32 le
 	if (type == CAVLAN_CHAT)      { CavLanClient_HandleChat(data, length); return; }
 	if (type == CAVLAN_DROPPED_ITEM) { CavLanClient_HandleDroppedItem(data, length); return; }
 	if (type == CAVLAN_PICKED_ITEM) { CavLanClient_HandlePickedItem(data, length); return; }
+	if (type == CAVLAN_MOB_SNAPSHOT) { CavLanClient_HandleMobSnapshot(data, length); return; }
+	if (type == CAVLAN_MOB_REMOVE) { CavLanClient_HandleMobRemove(data, length); return; }
 	if (type == CAVLAN_GAME_STATE) { CavLanClient_HandleGameState(data, length); return; }
 	if (type == CAVLAN_PLAYER_INFO) { CavLanClient_HandlePlayerInfo(data, length); return; }
 	if (type == CAVLAN_POSITION) {

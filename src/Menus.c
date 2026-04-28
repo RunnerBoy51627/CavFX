@@ -616,6 +616,7 @@ static void MainMenuScreen_ApplyMode(void) {
 }
 
 void CreateWorldScreen_Show(void);
+void LanWorldsScreen_Show(void);
 
 static void MainMenuScreen_Create(void* screen, void* widget) {
 	Gui_Remove((struct Screen*)screen);
@@ -649,8 +650,8 @@ static void MainMenuScreen_JoinDone(const cc_string* value, cc_bool valid) {
 }
 
 static void MainMenuScreen_Join(void* screen, void* widget) {
-	MenuInput_String(MainMenu_LanInput);
-	MenuInputOverlay_Show(&MainMenu_LanInput, &MainMenu_LanDefault, MainMenuScreen_JoinDone, true);
+	Gui_Remove((struct Screen*)screen);
+	LanWorldsScreen_Show();
 }
 
 static void MainMenuScreen_Mode(void* screen, void* widget) {
@@ -755,6 +756,225 @@ static int MainMenuScreen_KeyDown(void* screen, int key, struct InputDevice* dev
 	return Menu_InputDown(screen, key, device);
 }
 
+
+/*########################################################################################################################*
+*-----------------------------------------------------LanWorldsScreen-----------------------------------------------------*
+*#########################################################################################################################*/
+#define LAN_WORLDS_BUTTONS 5
+
+static struct LanWorldsScreen {
+	Screen_Body
+	struct FontDesc titleFont, textFont;
+	struct TextWidget title, status;
+	struct ButtonWidget servers[LAN_WORLDS_BUTTONS];
+	struct ButtonWidget join, refresh, direct, back;
+	struct Widget* __widgets[12];
+	int selected;
+	int lastCount;
+	cc_int64 lastPoll;
+} LanWorldsScreen;
+
+static cc_string LanWorlds_DirectDefault = String_FromConst("127.0.0.1:25565");
+
+static void LanWorlds_JoinAddress(const char* addressRaw, int port) {
+	cc_string address; char addressBuffer[STRING_SIZE];
+	String_InitArray(address, addressBuffer);
+	String_AppendConst(&address, addressRaw);
+
+	Game_ShowMainMenu = false;
+	Gui_Remove((struct Screen*)&LanWorldsScreen);
+	Server_ConnectTo(&address, port);
+}
+
+static void LanWorlds_JoinSelected(struct LanWorldsScreen* s) {
+	int count = Server_LANDiscoveryCount();
+	if (s->selected < 0 || s->selected >= count) return;
+	LanWorlds_JoinAddress(Server_LANDiscoveryAddress(s->selected), Server_LANDiscoveryPort(s->selected));
+}
+
+static void LanWorlds_UpdateButtons(struct LanWorldsScreen* s) {
+	cc_string text; char textBuffer[STRING_SIZE];
+	int i, count = Server_LANDiscoveryCount();
+	if (s->selected >= count) s->selected = count - 1;
+	if (s->selected < 0 && count > 0) s->selected = 0;
+
+	for (i = 0; i < LAN_WORLDS_BUTTONS; i++) {
+		if (i < count) {
+			String_InitArray(text, textBuffer);
+			if (s->selected == i) String_AppendConst(&text, "> ");
+			String_AppendConst(&text, Server_LANDiscoveryName(i));
+			String_AppendConst(&text, "  ");
+			String_AppendConst(&text, Server_LANDiscoveryAddress(i));
+			String_AppendConst(&text, ":");
+			String_AppendInt(&text, Server_LANDiscoveryPort(i));
+			ButtonWidget_Set(&s->servers[i], &text, &s->textFont);
+			Widget_SetDisabled(&s->servers[i], false);
+		} else {
+			ButtonWidget_SetConst(&s->servers[i], "---", &s->textFont);
+			Widget_SetDisabled(&s->servers[i], true);
+		}
+	}
+
+	if (count > 0) {
+		String_InitArray(text, textBuffer);
+		String_AppendConst(&text, "Found ");
+		String_AppendInt(&text, count);
+		String_AppendConst(&text, count == 1 ? " LAN world" : " LAN worlds");
+		TextWidget_Set(&s->status, &text, &s->textFont);
+		Widget_SetDisabled(&s->join, false);
+	} else {
+		TextWidget_SetConst(&s->status, "Searching for LAN worlds... Use Direct Connect if none appear.", &s->textFont);
+		Widget_SetDisabled(&s->join, true);
+	}
+	s->lastCount = count;
+	s->dirty = true;
+}
+
+static void LanWorlds_Select(struct LanWorldsScreen* s, int index) {
+	int count = Server_LANDiscoveryCount();
+	if (index < 0 || index >= count) return;
+	if (s->selected == index) { LanWorlds_JoinSelected(s); return; }
+	s->selected = index;
+	LanWorlds_UpdateButtons(s);
+}
+
+static void LanWorlds_Server0(void* screen, void* widget) { LanWorlds_Select((struct LanWorldsScreen*)screen, 0); }
+static void LanWorlds_Server1(void* screen, void* widget) { LanWorlds_Select((struct LanWorldsScreen*)screen, 1); }
+static void LanWorlds_Server2(void* screen, void* widget) { LanWorlds_Select((struct LanWorldsScreen*)screen, 2); }
+static void LanWorlds_Server3(void* screen, void* widget) { LanWorlds_Select((struct LanWorldsScreen*)screen, 3); }
+static void LanWorlds_Server4(void* screen, void* widget) { LanWorlds_Select((struct LanWorldsScreen*)screen, 4); }
+
+static void LanWorlds_Join(void* screen, void* widget) {
+	LanWorlds_JoinSelected((struct LanWorldsScreen*)screen);
+}
+
+static void LanWorlds_Refresh(void* screen, void* widget) {
+	struct LanWorldsScreen* s = (struct LanWorldsScreen*)screen;
+	Server_LANDiscoveryRefresh();
+	s->selected = -1;
+	LanWorlds_UpdateButtons(s);
+}
+
+static void LanWorlds_DirectDone(const cc_string* value, cc_bool valid) {
+	cc_string address = *value;
+	cc_string portStr;
+	int sep, port = 25565;
+	cc_uint16 parsedPort;
+
+	if (!valid || !value->length) return;
+	sep = String_LastIndexOf(value, ':');
+	if (sep > 0 && sep < value->length - 1) {
+		address = String_UNSAFE_Substring(value, 0, sep);
+		portStr = String_UNSAFE_SubstringAt(value, sep + 1);
+		if (Convert_ParseUInt16(&portStr, &parsedPort)) port = parsedPort;
+	}
+
+	Game_ShowMainMenu = false;
+	/* Close only the LAN browser, not the whole HUD/GUI stack. */
+	Gui_Remove((struct Screen*)&LanWorldsScreen);
+	Server_ConnectTo(&address, port);
+}
+
+static void LanWorlds_Direct(void* screen, void* widget) {
+	MenuInput_String(MainMenu_LanInput);
+	MenuInputOverlay_Show(&MainMenu_LanInput, &LanWorlds_DirectDefault, LanWorlds_DirectDone, true);
+}
+
+static void LanWorlds_Back(void* screen, void* widget) {
+	Gui_Remove((struct Screen*)screen);
+	MainMenuScreen_Show();
+}
+
+static void LanWorlds_Update(void* screen, float delta) {
+	struct LanWorldsScreen* s = (struct LanWorldsScreen*)screen;
+	cc_int64 now = Stopwatch_Measure();
+	(void)delta;
+	Server_LANDiscoveryTick();
+	if (!s->lastPoll || Stopwatch_ElapsedMS(s->lastPoll, now) > 500 || s->lastCount != Server_LANDiscoveryCount()) {
+		s->lastPoll = now;
+		LanWorlds_UpdateButtons(s);
+	}
+}
+
+static void LanWorlds_ContextLost(void* screen) {
+	struct LanWorldsScreen* s = (struct LanWorldsScreen*)screen;
+	Font_Free(&s->titleFont);
+	Font_Free(&s->textFont);
+	Screen_ContextLost(screen);
+}
+
+static void LanWorlds_ContextRecreated(void* screen) {
+	struct LanWorldsScreen* s = (struct LanWorldsScreen*)screen;
+	Screen_UpdateVb(screen);
+	Gui_MakeTitleFont(&s->titleFont);
+	Gui_MakeBodyFont(&s->textFont);
+
+	TextWidget_SetConst(&s->title, "LAN Worlds", &s->titleFont);
+	ButtonWidget_SetConst(&s->join,    "Join Server", &s->titleFont);
+	ButtonWidget_SetConst(&s->refresh, "Refresh", &s->titleFont);
+	ButtonWidget_SetConst(&s->direct,  "Direct Connect", &s->titleFont);
+	ButtonWidget_SetConst(&s->back,    "Back", &s->titleFont);
+	LanWorlds_UpdateButtons(s);
+}
+
+static void LanWorlds_Layout(void* screen) {
+	struct LanWorldsScreen* s = (struct LanWorldsScreen*)screen;
+	int i;
+	Widget_SetLocation(&s->title,  ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -170);
+	Widget_SetLocation(&s->status, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -130);
+	for (i = 0; i < LAN_WORLDS_BUTTONS; i++) {
+		Widget_SetLocation(&s->servers[i], ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -85 + i * 35);
+	}
+	Widget_SetLocation(&s->join,    ANCHOR_CENTRE, ANCHOR_CENTRE, -105, 105);
+	Widget_SetLocation(&s->refresh, ANCHOR_CENTRE, ANCHOR_CENTRE,  105, 105);
+	Widget_SetLocation(&s->direct,  ANCHOR_CENTRE, ANCHOR_CENTRE, -105, 150);
+	Widget_SetLocation(&s->back,    ANCHOR_CENTRE, ANCHOR_CENTRE,  105, 150);
+}
+
+static void LanWorlds_Init(void* screen) {
+	static const Widget_LeftClick serverClicks[LAN_WORLDS_BUTTONS] = {
+		LanWorlds_Server0, LanWorlds_Server1, LanWorlds_Server2, LanWorlds_Server3, LanWorlds_Server4
+	};
+	struct LanWorldsScreen* s = (struct LanWorldsScreen*)screen;
+	int i;
+	s->widgets = s->__widgets;
+	s->numWidgets = 0;
+	s->maxWidgets = Array_Elems(s->__widgets);
+	s->selectedI = -1;
+	s->widgetsPerPage = 6;
+
+	TextWidget_Add(s, &s->title);
+	TextWidget_Add(s, &s->status);
+	for (i = 0; i < LAN_WORLDS_BUTTONS; i++) ButtonWidget_Add(s, &s->servers[i], 520, serverClicks[i]);
+	ButtonWidget_Add(s, &s->join,    200, LanWorlds_Join);
+	ButtonWidget_Add(s, &s->refresh, 200, LanWorlds_Refresh);
+	ButtonWidget_Add(s, &s->direct,  200, LanWorlds_Direct);
+	ButtonWidget_Add(s, &s->back,    200, LanWorlds_Back);
+	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
+}
+
+static const struct ScreenVTABLE LanWorlds_VTABLE = {
+	LanWorlds_Init,   LanWorlds_Update, Screen_NullFunc,
+	MenuScreen_Render2, Screen_BuildMesh,
+	Menu_InputDown,   Screen_InputUp,   Screen_TKeyPress, Screen_TText,
+	Menu_PointerDown, Screen_PointerUp, Menu_PointerMove, Screen_TMouseScroll,
+	LanWorlds_Layout, LanWorlds_ContextLost, LanWorlds_ContextRecreated,
+	Menu_PadAxis
+};
+
+void LanWorldsScreen_Show(void) {
+	struct LanWorldsScreen* s = &LanWorldsScreen;
+	s->grabsInput  = true;
+	s->blocksWorld = true;
+	s->closable    = false;
+	s->VTABLE      = &LanWorlds_VTABLE;
+	s->selected    = -1;
+	s->lastCount   = -1;
+	s->lastPoll    = 0;
+	Server_LANDiscoveryRefresh();
+	Gui_Add((struct Screen*)s, GUI_PRIORITY_MENU);
+}
+
 /*########################################################################################################################*
 *----------------------------------------------------CreateWorldScreen----------------------------------------------------*
 *#########################################################################################################################*/
@@ -843,19 +1063,21 @@ static void CreateWorldScreen_ContextLost(void* screen) {
 
 static void CreateWorldScreen_ContextRecreated(void* screen) {
 	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
-	cc_string nameDefault = String_FromConst("New World");
-	cc_string seedDefault = String_FromConst("");
-	struct MenuInputDesc nameDesc, seedDesc;
+	cc_string name = String_FromConst("New World");
+	cc_string seed = String_FromConst("");
+	struct MenuInputDesc desc;
 
 	Screen_UpdateVb(screen);
+
 	Gui_MakeTitleFont(&s->titleFont);
 	Gui_MakeBodyFont(&s->textFont);
 
-	MenuInput_String(nameDesc);
-	MenuInput_String(seedDesc);
+	MenuInput_String(desc);
 
-	TextInputWidget_Create(&s->nameText, 420, &nameDefault, &nameDesc);
-	TextInputWidget_Create(&s->seedText, 420, &seedDefault, &seedDesc);
+	/* RECREATE INPUT BOXES ON RESIZE */
+	TextInputWidget_Create(&s->nameText, 420, &name, &desc);
+	TextInputWidget_Create(&s->seedText, 420, &seed, &desc);
+
 	TextInputWidget_SetFont(&s->nameText, &s->titleFont);
 	TextInputWidget_SetFont(&s->seedText, &s->titleFont);
 
@@ -872,36 +1094,51 @@ static void CreateWorldScreen_ContextRecreated(void* screen) {
 
 	ButtonWidget_SetConst(&s->create, "Create New World", &s->titleFont);
 	ButtonWidget_SetConst(&s->cancel, "Cancel", &s->titleFont);
+
+	/* FORCE RELAYOUT AFTER RESIZE */
+	CreateWorldScreen_Layout(screen);
+
+	s->dirty = true;
 }
 
 static void CreateWorldScreen_Layout(void* screen) {
 	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
+	struct MenuInputDesc desc;
 
-	int leftX = -230;
-	int rightX = 230;
+	/* title */
+	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_MIN, 0, 18);
 
-	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -240);
+	/* top inputs */
+	Widget_SetLocation(&s->nameLabel, ANCHOR_CENTRE, ANCHOR_MIN, -140, 72);
+	Widget_SetLocation(&s->saveLabel, ANCHOR_CENTRE, ANCHOR_MIN, 0, 146);
 
-	/* TOP MIDDLE: world name + seed */
-	Widget_SetLocation(&s->nameLabel, ANCHOR_CENTRE, ANCHOR_CENTRE, -170, -185);
-	Widget_SetLocation(&s->nameText.base, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -150);
-	Widget_SetLocation(&s->saveLabel, ANCHOR_CENTRE, ANCHOR_CENTRE, -90, -115);
+	Widget_SetLocation(&s->seedLabel, ANCHOR_CENTRE, ANCHOR_MIN, -175, 196);
+	Widget_SetLocation(&s->seedHelp, ANCHOR_CENTRE, ANCHOR_MIN, 0, 270);
 
-	Widget_SetLocation(&s->seedLabel, ANCHOR_CENTRE, ANCHOR_CENTRE, -105, -75);
-	Widget_SetLocation(&s->seedText.base, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -40);
-	Widget_SetLocation(&s->seedHelp, ANCHOR_CENTRE, ANCHOR_CENTRE, -85, -5);
+	/* middle options */
+	Widget_SetLocation(&s->mode, ANCHOR_CENTRE, ANCHOR_MIN, 0, 330);
+	Widget_SetLocation(&s->desc, ANCHOR_CENTRE, ANCHOR_MIN, 0, 374);
+	Widget_SetLocation(&s->structures, ANCHOR_CENTRE, ANCHOR_MIN, 0, 430);
+	Widget_SetLocation(&s->worldType, ANCHOR_CENTRE, ANCHOR_MIN, 0, 486);
+	Widget_SetLocation(&s->structHelp, ANCHOR_CENTRE, ANCHOR_MIN, 0, 528);
 
-	/* BOTTOM LEFT: main settings */
-	Widget_SetLocation(&s->mode, ANCHOR_CENTRE, ANCHOR_CENTRE, leftX, 60);
-	Widget_SetLocation(&s->desc, ANCHOR_CENTRE, ANCHOR_CENTRE, leftX, 115);
+	/* bottom buttons */
+	Widget_SetLocation(&s->create, ANCHOR_CENTRE, ANCHOR_MAX, -185, 22);
+	Widget_SetLocation(&s->cancel, ANCHOR_CENTRE, ANCHOR_MAX, 185, 22);
 
-	/* BOTTOM RIGHT: options */
-	Widget_SetLocation(&s->structures, ANCHOR_CENTRE, ANCHOR_CENTRE, rightX, 60);
-	Widget_SetLocation(&s->worldType, ANCHOR_CENTRE, ANCHOR_CENTRE, rightX, 115);
-	Widget_SetLocation(&s->structHelp, ANCHOR_CENTRE, ANCHOR_CENTRE, rightX - 70, 165);
+	/* FIX resize bug */
+	MenuInput_String(desc);
 
-	Widget_SetLocation(&s->create, ANCHOR_CENTRE, ANCHOR_MAX, -180, 25);
-	Widget_SetLocation(&s->cancel, ANCHOR_CENTRE, ANCHOR_MAX, 180, 25);
+	TextInputWidget_Create(&s->nameText, 420, &s->nameText.base.text, &desc);
+	TextInputWidget_Create(&s->seedText, 420, &s->seedText.base.text, &desc);
+
+	TextInputWidget_SetFont(&s->nameText, &s->titleFont);
+	TextInputWidget_SetFont(&s->seedText, &s->titleFont);
+
+	Widget_SetLocation(&s->nameText.base, ANCHOR_CENTRE, ANCHOR_MIN, 0, 104);
+	Widget_SetLocation(&s->seedText.base, ANCHOR_CENTRE, ANCHOR_MIN, 0, 228);
+
+	s->dirty = true;
 }
 
 static void CreateWorldScreen_Init(void* screen) {
@@ -1086,61 +1323,95 @@ static void PauseScreenBase_AddWidgets(struct PauseScreen* s, int width) {
 /*########################################################################################################################*
 *-------------------------------------------------------PauseScreen-------------------------------------------------------*
 *#########################################################################################################################*/
+#define PAUSE_MAX_BTNS 6
 static struct Widget* pause_widgets[1 + 6 + 2];
 
 static void PauseScreen_CheckHacksAllowed(void* screen) {
 	struct PauseScreen* s = (struct PauseScreen*)screen;
-	if (Gui.ClassicMenu) return;
 
-	Widget_SetDisabled(&s->btns[1],
-		!Entities.CurPlayer->Hacks.CanAnyHacks); /* select texture pack */
+	/* In CavLAN:
+	   Server_IsLANHosted() == host opened LAN
+	   so host should KEEP buttons.
+	   non-host LAN client should lose host-only buttons.
+	*/
+	cc_bool isLanHost = Server_IsLANHosted();
+	cc_bool isLanClient = !Server.IsSinglePlayer && !isLanHost;
+
+	Widget_SetDisabled(&s->btns[2], isLanClient); /* Open To LAN */
+	Widget_SetDisabled(&s->btns[4], isLanClient); /* Save Level */
+
 	s->dirty = true;
+}
+
+static void PauseScreen_SaveQuit(void* screen, void* widget) {
+	if (Server.IsSinglePlayer) {
+		Menu_AutoSaveCurrentWorld();
+	}
+
+	Gui_Remove((struct Screen*)screen);
+
+	World_NewMap();
+
+	MainMenu_Creative = false;
+	MainMenuScreen_ApplyMode();
+	MainMenuScreen_Show();
 }
 
 static void PauseScreen_ContextRecreated(void* screen) {
 	struct PauseScreen* s = (struct PauseScreen*)screen;
 	struct FontDesc titleFont;
+
 	PauseScreenBase_ContextRecreated(s, &titleFont);
 
-	ButtonWidget_SetConst(&s->quit, "Quit game", &titleFont);
+	if (Server.IsSinglePlayer) {
+		ButtonWidget_SetConst(&s->btns[5], "Save & Quit", &titleFont);
+	}
+	else {
+		ButtonWidget_SetConst(&s->btns[5], "Leave Server", &titleFont);
+	}
+
+	ButtonWidget_SetConst(&s->quit, "Quit Game", &titleFont);
 	PauseScreen_CheckHacksAllowed(s);
+
 	Font_Free(&titleFont);
 }
 
 static void PauseScreen_Layout(void* screen) {
 	struct PauseScreen* s = (struct PauseScreen*)screen;
+
 	Menu_LayoutButtons(s->btns, s->descs, s->descsCount);
 	Menu_LayoutBack(&s->back);
+
+	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -190);
 	Widget_SetLocation(&s->quit, ANCHOR_MAX, ANCHOR_MAX, 5, 5);
-	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -100);
 }
 
 static void PauseScreen_Init(void* screen) {
 	struct PauseScreen* s = (struct PauseScreen*)screen;
+
 	static const struct SimpleButtonDesc descs[] = {
-		{ -160,  -50, "Options...",             Menu_SwitchOptions   },
-		{ -160,    0, "Change texture pack...", Menu_SwitchTexPacks  },
-		{ -160,   50, "Hotkeys...",             Menu_SwitchHotkeys   },
-		{  160,  -50, "Generate new level...",  Menu_SwitchGenLevel  },
-		{  160,    0, "Load level...",          Menu_SwitchLoadLevel },
-		{  160,   50, "Save level...",          Menu_SwitchSaveLevel }
+		{ 0, -135, "Resume Game",  PauseScreenBase_Game },
+		{ 0,  -80, "Options...",   Menu_SwitchOptions   },
+		{ 0,  -25, "Open To LAN",  Menu_OpenToLAN       },
+		{ 0,   30, "Hotkeys...",   Menu_SwitchHotkeys   },
+		{ 0,   85, "Save Level",   Menu_SwitchSaveLevel },
+		{ 0,  140, "Save & Quit",  PauseScreen_SaveQuit }
 	};
 
 	s->widgets = pause_widgets;
 	s->numWidgets = 0;
 	s->maxWidgets = Array_Elems(pause_widgets);
-	s->widgetsPerPage = 3;
+	s->widgetsPerPage = 1;
+
 	Event_Register_(&UserEvents.HackPermsChanged, s, PauseScreen_CheckHacksAllowed);
 
 	s->descs = descs;
 	s->descsCount = Array_Elems(descs);
-	PauseScreenBase_AddWidgets(s, 300);
-	ButtonWidget_Add(s, &s->quit, 120, PauseScreenBase_Quit);
-	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
 
-	if (Server.IsSinglePlayer) return;
-	s->btns[3].flags = WIDGET_FLAG_DISABLED;
-	s->btns[4].flags = WIDGET_FLAG_DISABLED;
+	PauseScreenBase_AddWidgets(s, 420);
+	ButtonWidget_Add(s, &s->quit, 180, PauseScreenBase_Quit);
+
+	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
 }
 
 static void PauseScreen_Free(void* screen) {
@@ -1155,6 +1426,7 @@ static const struct ScreenVTABLE PauseScreen_VTABLE = {
 	PauseScreen_Layout, Screen_ContextLost, PauseScreen_ContextRecreated,
 	Menu_PadAxis
 };
+
 void PauseScreen_Show(void) {
 	struct PauseScreen* s = &PauseScreen;
 	s->grabsInput = true;
@@ -1162,7 +1434,6 @@ void PauseScreen_Show(void) {
 	s->VTABLE = &PauseScreen_VTABLE;
 	Gui_Add((struct Screen*)s, GUI_PRIORITY_MENU);
 }
-
 
 /*########################################################################################################################*
 *----------------------------------------------------ClassicPauseScreen---------------------------------------------------*
@@ -1991,6 +2262,36 @@ static cc_result SaveLevelScreen_SaveMap(const cc_string* path) {
 	return 0;
 }
 
+cc_result Menu_AutoSaveCurrentWorld(void) {
+	struct GZipState* state;
+	cc_string path, backup; char pathBuffer[FILENAME_SIZE], backupBuffer[FILENAME_SIZE];
+	cc_filepath backupDir;
+	cc_result res;
+
+	if (!World.Name.length) return 0;
+	String_InitArray(path, pathBuffer);
+	String_Format1(&path, "Maps/%s.cw", &World.Name);
+
+	state = (struct GZipState*)Mem_TryAlloc(1, sizeof(struct GZipState));
+	if (!state) return ERR_OUT_OF_MEMORY;
+
+	res = DoSaveMap(&path, state);
+	if (res) { Mem_Free(state); return res; }
+
+	String_InitArray(backup, backupBuffer);
+	String_AppendConst(&backup, "Maps/Backup");
+	Platform_EncodePath(&backupDir, &backup);
+	Directory_Create2(&backupDir);
+
+	backup.length = 0;
+	String_Format1(&backup, "Maps/Backup/%s.cw", &World.Name);
+	res = DoSaveMap(&backup, state);
+
+	Mem_Free(state);
+	World.LastSave = Game.Time;
+	return res;
+}
+
 static void SaveLevelScreen_Save(void* screen, void* widget) {
 	struct SaveLevelScreen* s = (struct SaveLevelScreen*)screen;
 	struct ButtonWidget* btn = (struct ButtonWidget*)widget;
@@ -2005,7 +2306,7 @@ static void SaveLevelScreen_Save(void* screen, void* widget) {
 	}
 
 	String_InitArray(path, pathBuffer);
-	String_Format1(&path, "maps/%s.cw", &file);
+	String_Format1(&path, "Maps/%s.cw", &file);
 	String_Copy(&World.Name, &file);
 
 	Platform_EncodePath(&str, &path);
@@ -2407,7 +2708,7 @@ static void LoadLevelScreen_EntryClick(void* screen, void* widget) {
 
 	cc_string relPath = ListScreen_UNSAFE_GetCur(s, widget);
 	String_InitArray(path, pathBuffer);
-	String_Format1(&path, "maps/%s", &relPath);
+	String_Format1(&path, "Maps/%s", &relPath);
 	res = Map_LoadFrom(&path);
 	if (!res && LoadLevelScreen_FromMainMenu) {
 		LoadLevelScreen_FromMainMenu = false;
@@ -2435,7 +2736,7 @@ static void LoadLevelScreen_FilterFiles(const cc_string* path, void* obj, int is
 }
 
 static void LoadLevelScreen_LoadEntries(struct ListScreen* s) {
-	static const cc_string path = String_FromConst("maps");
+	static const cc_string path = String_FromConst("Maps");
 	Directory_Enum(&path, &s->entries, LoadLevelScreen_FilterFiles);
 	StringsBuffer_Sort(&s->entries);
 }

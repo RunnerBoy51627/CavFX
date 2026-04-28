@@ -20,6 +20,8 @@ void Ping_Update(int id);
 /* Calculates average ping time based on most recent ping entries */
 int Ping_AveragePingMS(void);
 
+
+
 /* Data for currently active connection to a server */
 CC_VAR extern struct _ServerConnectionData {
 	/* Begins connecting to the server */
@@ -71,6 +73,7 @@ CC_VAR extern struct _ServerConnectionData {
 	cc_bool SupportsNotifyAction;
 } Server;
 
+void Server_LeaveLAN(void);
 /* If user hasn't previously accepted url, displays a dialog asking to confirm downloading it */
 /* Otherwise just calls TexturePack_Extract */
 void Server_RetrieveTexturePack(const cc_string* url);
@@ -82,10 +85,23 @@ cc_bool Server_StartLAN(int port);
 void Server_StopLAN(void);
 /* Whether the current singleplayer world is listening for LAN clients. */
 cc_bool Server_IsLANHosted(void);
+
+#define SERVER_LAN_DISCOVERY_MAX 8
+/* Clears old LAN discovery results and starts listening for broadcasts. */
+void Server_LANDiscoveryRefresh(void);
+/* Polls for LAN broadcasts; call this from the LAN browser screen. */
+void Server_LANDiscoveryTick(void);
+int Server_LANDiscoveryCount(void);
+const char* Server_LANDiscoveryName(int index);
+const char* Server_LANDiscoveryAddress(int index);
+int Server_LANDiscoveryPort(int index);
 /* Broadcasts a locally spawned dropped item to CavLAN peers, if connected. */
 void Server_SendDroppedItem(BlockID block, Vec3 pos, Vec3 vel);
 /* Broadcasts a locally picked up dropped item to CavLAN peers, if connected. */
 void Server_SendPickedItem(BlockID block, Vec3 pos);
+/* Broadcasts a host-authoritative mob snapshot/removal to CavLAN peers. */
+void Server_SendMobSnapshot(EntityID id, cc_uint8 kind, Vec3 pos, Vec3 vel, float yaw, float pitch, int health);
+void Server_SendMobRemove(EntityID id);
 
 /* Path of map to automatically load in singleplayer */
 extern cc_string SP_AutoloadMap;

@@ -6,7 +6,7 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 */
 
 #define GAME_MAX_CMDARGS 5
-#define GAME_APP_VER "0.0.1"
+#define GAME_APP_VER "0.0.1_01 Test 1"
 #define GAME_API_VER 1
 #define GAME_PHASE "Alpha "
 

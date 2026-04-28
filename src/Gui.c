@@ -316,7 +316,7 @@ void Gui_UpdateInputGrab(void) {
 void Gui_ShowPauseMenu(void) {
 #ifndef CC_DISABLE_UI
 	if (Gui.ClassicMenu) {
-		ClassicPauseScreen_Show();
+		PauseScreen_Show();
 	} else {
 		PauseScreen_Show();
 	}

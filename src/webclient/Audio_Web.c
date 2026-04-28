@@ -85,6 +85,16 @@ cc_result SoundContext_PollBusy(struct AudioContext* ctx, cc_bool* isBusy) {
 	return 0;
 }
 
+cc_result Audio_AllocChunks(cc_uint32 size, struct AudioChunk* chunks, int numChunks) {
+	int i;
+
+	for (i = 0; i < numChunks; i++) {
+		chunks[i].data = NULL;
+		chunks[i].size = size;
+	}
+	return 0;
+}
+
 
 /*########################################################################################################################*
 *--------------------------------------------------------Audio misc-------------------------------------------------------*

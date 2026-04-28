@@ -274,6 +274,47 @@ static void Sounds_Free(void) { Sounds_Stop(); }
 
 void Audio_PlayDigSound(cc_uint8 type)  { Sounds_Play(type, &digBoard); }
 void Audio_PlayStepSound(cc_uint8 type) { Sounds_Play(type, &stepBoard); }
+
+static struct Sound ouchSound;
+static cc_bool ouchLoaded, ouchFailed;
+
+static cc_bool OuchSound_Load(void) {
+	static const cc_string path = String_FromConst("audio/ouch.wav");
+	struct Stream stream;
+	cc_filepath raw_path;
+	cc_result res;
+
+	if (ouchLoaded) return true;
+	if (ouchFailed) return false;
+
+	Platform_EncodePath(&raw_path, &path);
+	res = Stream_OpenPath(&stream, &raw_path);
+	if (res) { Logger_IOWarn2(res, "opening", &raw_path); ouchFailed = true; return false; }
+
+	res = Sound_ReadWaveData(&stream, &ouchSound);
+	(void)stream.Close(&stream);
+	if (res) { Logger_SimpleWarn2(res, "loading", &path); ouchFailed = true; return false; }
+
+	ouchLoaded = true;
+	return true;
+}
+
+void Audio_PlayOuchSound(void) {
+	struct AudioData data;
+	cc_result res;
+
+	if (!Audio_SoundsVolume) return;
+	if (!OuchSound_Load()) return;
+
+	data.chunk      = ouchSound.chunk;
+	data.channels   = ouchSound.channels;
+	data.sampleRate = ouchSound.sampleRate;
+	data.rate       = 100;
+	data.volume     = Audio_SoundsVolume;
+
+	res = AudioPool_Play(&data);
+	if (res) Sounds_Fail(res);
+}
 #endif
 
 

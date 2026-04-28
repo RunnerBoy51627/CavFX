@@ -135,7 +135,7 @@ static void PerspectiveCamera_UpdateMouse(struct LocalPlayer* p, float delta) {
 
 static void PerspectiveCamera_CalcViewBobbing(struct LocalPlayer* p, float t, float velTiltScale) {
 	struct Entity* e = &p->Base;
-	struct Matrix tiltY, velX;
+	struct Matrix tiltY, velX, hurtZ, hurtX;
 
 	float vel, fall, xTilt, yTilt;
 	float bobStrength, bobbingHor, bobbingVer;
@@ -144,6 +144,10 @@ static void PerspectiveCamera_CalcViewBobbing(struct LocalPlayer* p, float t, fl
 	if (!Game_ViewBobbing) {
 		Camera.TiltM     = Matrix_Identity;
 		Camera.TiltPitch = 0.0f;
+		if (p->HurtTilt > 0.0f) {
+			Matrix_RotateZ(&hurtZ, p->HurtTiltDir * p->HurtTilt * MATH_DEG2RAD);
+			Matrix_MulBy(&Camera.TiltM, &hurtZ);
+		}
 		return;
 	}
 	
@@ -170,6 +174,12 @@ static void PerspectiveCamera_CalcViewBobbing(struct LocalPlayer* p, float t, fl
 
 	Matrix_RotateX(&velX, fall);
 	Matrix_MulBy(&Camera.TiltM, &velX);
+	if (p->HurtTilt > 0.0f) {
+		Matrix_RotateZ(&hurtZ, p->HurtTiltDir * p->HurtTilt * MATH_DEG2RAD);
+		Matrix_MulBy(&Camera.TiltM, &hurtZ);
+		Matrix_RotateX(&hurtX, -p->HurtTilt * 0.12f * MATH_DEG2RAD);
+		Matrix_MulBy(&Camera.TiltM, &hurtX);
+	}
 	if (!Game_ClassicMode) Camera.TiltPitch = fall;
 }
 

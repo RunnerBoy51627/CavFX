@@ -268,6 +268,7 @@ struct LocalPlayer {
 	cc_bool _warnedRespawn, _warnedFly, _warnedNoclip, _warnedZoom;
 	int Health;
 	float SurvivalDamageCooldown, SurvivalLavaCooldown, SurvivalOxygenCooldown, Oxygen, Stamina;
+	float HurtTilt, HurtTiltDir;
 	cc_bool Underwater;
 	cc_bool SprintHeld, Sprinting, SprintKeyDown, SprintExhausted, Sneaking;
 	cc_uint8 index;

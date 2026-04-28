@@ -436,8 +436,15 @@ static void HUDScreen_BuildOxygenMesh(struct HUDScreen* s, struct VertexTextured
 		if (bubbles > SURVIVAL_OXYGEN_BUBBLES) bubbles = SURVIVAL_OXYGEN_BUBBLES;
 	}
 
+#if defined(CC_BUILD_3DS) || defined(CC_BUILD_DS)
+	/* On dual-screen builds, keep survival HUD on the bottom screen.
+	   Use fixed 320x240 bottom-screen coordinates instead of hotbar/top-screen coords. */
+	baseX = 8 + DisplayInfo.ContentOffsetX;
+	baseY = 28 + DisplayInfo.ContentOffsetY;
+#else
 	baseX = s->hotbar.x;
 	baseY = s->hotbar.y - (sizeY * 2) - Math_Ceil(6.0f * DisplayInfo.ScaleY);
+#endif
 
 	tex.width  = sizeX;
 	tex.height = sizeY;
@@ -466,8 +473,14 @@ static void HUDScreen_BuildHealthMesh(struct HUDScreen* s, struct VertexTextured
 	int stepX  = Math_Ceil(8.0f * scaleX);
 	int i, x;
 
+#if defined(CC_BUILD_3DS) || defined(CC_BUILD_DS)
+	/* Hearts go bottom-left on 3DS/DS. Oxygen is drawn just below this. */
+	tex.x      = 8 + DisplayInfo.ContentOffsetX;
+	tex.y      = 8 + DisplayInfo.ContentOffsetY;
+#else
 	tex.x      = s->hotbar.x;
 	tex.y      = s->hotbar.y - sizeY - Math_Ceil(4.0f * DisplayInfo.ScaleY);
+#endif
 	tex.width  = sizeX;
 	tex.height = sizeY;
 	tex.uv.v1 = 0.0f;
@@ -544,14 +557,24 @@ static void HUDScreen_Render(void* screen, float delta) {
 			Gfx_BindDynamicVb(s->vb); /* Have to rebind for mobile right now... */
 			Gfx_DrawVb_IndexedTris_Range(4, 0, DRAW_HINT_SPRITE);
 		}
+#if !(defined(CC_BUILD_3DS) || defined(CC_BUILD_DS))
 		if (Game_SurvivalMode && Gui.IconsTex) {
 			Gfx_BindTexture(Gui.IconsTex);
 			Gfx_BindDynamicVb(s->vb);
 			Gfx_DrawVb_IndexedTris_Range(SURVIVAL_HUD_VERTICES, 16 + HOTBAR_MAX_VERTICES, DRAW_HINT_SPRITE);
 		}
+#endif
 	}
 
 	Gfx_3DS_SetRenderScreen(BOTTOM_SCREEN);
+
+#if defined(CC_BUILD_3DS) || defined(CC_BUILD_DS)
+	if (!Gui_GetBlocksWorld() && Game_SurvivalMode && Gui.IconsTex) {
+		Gfx_BindTexture(Gui.IconsTex);
+		Gfx_BindDynamicVb(s->vb);
+		Gfx_DrawVb_IndexedTris_Range(SURVIVAL_HUD_VERTICES, 16 + HOTBAR_MAX_VERTICES, DRAW_HINT_SPRITE);
+	}
+#endif
 }
 
 static const struct ScreenVTABLE HUDScreen_VTABLE = {
@@ -2667,14 +2690,14 @@ static struct DisconnectScreen {
 	float delayLeft;
 	cc_bool canReconnect, lastActive;
 	int lastSecsLeft;
-	struct ButtonWidget reconnect, quit;
+	struct ButtonWidget reconnect, mainMenu, quit;
 
 	struct FontDesc titleFont, messageFont;
 	struct TextWidget title, message;
 	char _titleBuffer[STRING_SIZE * 2];
 	char _messageBuffer[STRING_SIZE];
 	cc_string titleStr, messageStr;
-	struct Widget* __widgets[4];
+	struct Widget* __widgets[5];
 } DisconnectScreen CC_BIG_VAR;
 
 #define DISCONNECT_DELAY_SECS 5
@@ -2683,8 +2706,9 @@ static void DisconnectScreen_Layout(void* screen) {
 	struct DisconnectScreen* s = (struct DisconnectScreen*)screen;
 	Widget_SetLocation(&s->title,     ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -30);
 	Widget_SetLocation(&s->message,   ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  10);
-	Widget_SetLocation(&s->reconnect, ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  80);
-	Widget_SetLocation(&s->quit,      ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 130);
+	Widget_SetLocation(&s->reconnect, ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  60);
+	Widget_SetLocation(&s->mainMenu,  ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 110);
+	Widget_SetLocation(&s->quit,      ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 160);
 }
 
 static void DisconnectScreen_UpdateReconnect(struct DisconnectScreen* s) {
@@ -2722,6 +2746,7 @@ static void DisconnectScreen_ContextRecreated(void* screen) {
 	TextWidget_Set(&s->message, &s->messageStr, &s->messageFont);
 
 	DisconnectScreen_UpdateReconnect(s);
+	ButtonWidget_SetConst(&s->mainMenu, "Return to Main Menu", &s->titleFont);
 	ButtonWidget_SetConst(&s->quit, "Quit game", &s->titleFont);
 }
 
@@ -2729,6 +2754,19 @@ static void DisconnectScreen_OnReconnect(void* s, void* w) {
 	Gui_Remove((struct Screen*)s);
 	Gui_ShowDefault();
 	Server.BeginConnect();
+}
+
+static void DisconnectScreen_OnMainMenu(void* screen, void* widget) {
+	/* Make sure any half-open LAN/external session is torn down before returning
+	   to main menu. This prevents the hidden-host/ghost-session bug. */
+	if (Server.IsSinglePlayer) {
+		Server_StopLAN();
+	} else {
+		Server_LeaveLAN();
+	}
+	Gui_Remove((struct Screen*)screen);
+	World_NewMap();
+	MainMenuScreen_Show();
 }
 
 static void DisconnectScreen_OnQuit(void* s, void* w) { 
@@ -2745,6 +2783,7 @@ static void DisconnectScreen_Init(void* screen) {
 	TextWidget_Add(s, &s->message);
 
 	ButtonWidget_Add(s, &s->reconnect, 300, DisconnectScreen_OnReconnect);
+	ButtonWidget_Add(s, &s->mainMenu,  300, DisconnectScreen_OnMainMenu);
 	ButtonWidget_Add(s, &s->quit,      300, DisconnectScreen_OnQuit);
 	if (!s->canReconnect) s->reconnect.flags = WIDGET_FLAG_DISABLED;
 

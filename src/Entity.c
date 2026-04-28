@@ -5,6 +5,7 @@
 #include "Event.h"
 #include "Game.h"
 #include "Camera.h"
+#include "Audio.h"
 #include "Platform.h"
 #include "Funcs.h"
 #include "Graphics.h"
@@ -25,6 +26,8 @@
 #include "EntityRenderers.h"
 #include "Protocol.h"
 #include "Server.h"
+#include "HeldBlockRenderer.h"
+#include "Audio.h"
 
 const char* const NameMode_Names[NAME_MODE_COUNT]   = { "None", "Hovered", "All", "AllHovered", "AllUnscaled" };
 const char* const ShadowMode_Names[SHADOW_MODE_COUNT] = { "None", "SnapToBlock", "Circle", "CircleAll" };
@@ -898,6 +901,11 @@ static void Mob_Tick(struct Entity* e, float delta) {
 
 	AnimatedComp_Update(e, oldPos, e->Position, delta);
 
+	/* LAN host is authoritative for mobs: broadcast movement/state snapshots. */
+	if (Server_IsLANHosted()) {
+		Server_SendMobSnapshot((EntityID)mob->EntityID, (cc_uint8)mob->Kind, e->Position, e->Velocity, e->Yaw, e->Pitch, mob->Health);
+	}
+
 	attackRange = mob->AttackRange;
 	if (distSq <= attackRange * attackRange && mob->AttackCooldown <= 0.0f) {
 		mob->AttackCooldown = MOB_ATTACK_COOLDOWN;
@@ -973,6 +981,12 @@ static cc_bool Mob_SpawnCore(Vec3 pos, int kind) {
 
 		Entities.List[raw] = e;
 		Event_RaiseInt(&EntityEvents.Added, raw);
+
+		/* If this host spawns a mob while LAN is open, push the spawn immediately.
+		 * Movement snapshots still continue from Mob_Tick afterwards. */
+		if (Server_IsLANHosted()) {
+			Server_SendMobSnapshot((EntityID)raw, (cc_uint8)kind, e->Position, e->Velocity, e->Yaw, e->Pitch, mob->Health);
+		}
 		return true;
 	}
 	return false;
@@ -982,6 +996,98 @@ cc_bool Mob_SpawnZombie(Vec3 pos)   { return Mob_SpawnCore(pos, MOB_KIND_ZOMBIE)
 cc_bool Mob_SpawnSkeleton(Vec3 pos) { return Mob_SpawnCore(pos, MOB_KIND_SKELETON); }
 cc_bool Mob_SpawnCreeper(Vec3 pos)  { return Mob_SpawnCore(pos, MOB_KIND_CREEPER); }
 cc_bool Mob_SpawnSpider(Vec3 pos)   { return Mob_SpawnCore(pos, MOB_KIND_SPIDER); }
+
+
+/* Called by Server.c when a LAN client receives a host-authoritative mob snapshot. */
+void Mob_SetSyncedState(EntityID id, cc_uint8 kind, Vec3 pos, Vec3 vel, float yaw, float pitch, int health) {
+	struct Mob* mob;
+	struct Entity* e;
+	cc_string model;
+	int slot;
+
+	if (id < MOBS_FIRST || id >= DROPPED_ITEMS_FIRST) return;
+	slot = id - MOBS_FIRST;
+	if (slot < 0 || slot >= MAX_MOBS) return;
+
+	mob = &Mobs[slot];
+	e = &mob->Base;
+
+	/* Create the mob locally if this is the first snapshot for it. */
+	if (Entities.List[id] != e) {
+		if (Entities.List[id]) Entities_Remove(id);
+
+		Mem_Set(mob, 0, sizeof(struct Mob));
+		Entity_Init(e);
+		e->VTABLE = &mob_VTABLE;
+		e->Flags |= ENTITY_FLAG_HAS_MODELVB;
+		e->ShouldRender = true;
+
+		mob->EntityID = id;
+		mob->Kind = kind;
+		mob->Health = health;
+		mob->Damage = 2;
+		mob->Speed = 0.065f;
+		mob->AttackRange = 1.20f;
+		mob->WanderCooldown = 0.0f;
+		mob->StuckTimer = 0.0f;
+		mob->JumpCooldown = 0.0f;
+		Vec3_Set(mob->WanderDir, 0.0f, 0.0f, 1.0f);
+
+		if (kind == MOB_KIND_SKELETON) {
+			model = String_FromReadonly("skeleton");
+			mob->Speed = 0.060f;
+			mob->AttackRange = 1.35f;
+		} else if (kind == MOB_KIND_CREEPER) {
+			model = String_FromReadonly("creeper");
+			mob->Speed = 0.060f;
+			mob->Damage = 6;
+			mob->AttackRange = 1.60f;
+		} else if (kind == MOB_KIND_SPIDER) {
+			model = String_FromReadonly("spider");
+			mob->Health = 16;
+			mob->Speed = 0.085f;
+			mob->AttackRange = 1.30f;
+		} else {
+			model = String_FromReadonly("zombie");
+		}
+
+		Entity_SetModel(e, &model);
+		Entity_UpdateModelBounds(e);
+		mob->Collisions.Entity = e;
+		mob->Collisions.StepSize = 0.0f;
+
+		Entities.List[id] = e;
+		Event_RaiseInt(&EntityEvents.Added, id);
+	}
+
+	mob->Kind   = kind;
+	mob->Health = health;
+	e->Position = pos;
+	e->Velocity = vel;
+	e->Yaw      = yaw;
+	e->RotY     = yaw;
+	e->Pitch    = pitch;
+}
+
+/* Called by Server.c when the LAN host says a mob was removed/dead. */
+void Mob_RemoveSynced(EntityID id) {
+	if (id < MOBS_FIRST || id >= DROPPED_ITEMS_FIRST) return;
+	if (!Entities.List[id]) return;
+	Entities_Remove(id);
+}
+
+/* Called by Server.c after a LAN client finishes joining, so late joiners see current mobs. */
+void Mob_SendAllSnapshots(void) {
+	int i;
+	for (i = 0; i < MAX_MOBS; i++) {
+		struct Mob* mob = &Mobs[i];
+		struct Entity* e = &mob->Base;
+		int id = MOBS_FIRST + i;
+		if (mob->EntityID != id) continue;
+		if (Entities.List[id] != e) continue;
+		Server_SendMobSnapshot((EntityID)id, (cc_uint8)mob->Kind, e->Position, e->Velocity, e->Yaw, e->Pitch, mob->Health);
+	}
+}
 
 cc_bool Mob_AttackClosest(float reach, int damage) {
 	struct LocalPlayer* p = Entities.CurPlayer;
@@ -1005,6 +1111,9 @@ cc_bool Mob_AttackClosest(float reach, int damage) {
 		best = i;
 	}
 	if (best < 0) return false;
+
+	/* Make the first-person hand/held block swing when hitting a mob. */
+	HeldBlockRenderer_ClickAnim(false);
 
 	{
 		struct Mob* mob = (struct Mob*)Entities.List[best];
@@ -1296,6 +1405,8 @@ static void LocalPlayer_Heal(struct LocalPlayer* p) {
 	p->Oxygen = 20.0f;
 	p->Underwater = false;
 	p->SurvivalOxygenCooldown = 0.0f;
+	p->HurtTilt = 0.0f;
+	p->HurtTiltDir = 1.0f;
 	p->Sprinting = false;
 	p->SprintHeld = false;
 	p->SprintKeyDown = false;
@@ -1305,17 +1416,35 @@ static void LocalPlayer_Heal(struct LocalPlayer* p) {
 	p->SurvivalLavaCooldown   = 0.0f;
 }
 
-static void LocalPlayer_Damage(struct LocalPlayer* p, int damage) {
+static void LocalPlayer_ApplyDamage(struct LocalPlayer* p, int damage, cc_bool useIFrames) {
 	if (!Game_SurvivalMode || damage <= 0) return;
-	if (p->SurvivalDamageCooldown > 0.0f) return;
+	if (p->Health <= 0) return;
+	if (useIFrames && p->SurvivalDamageCooldown > 0.0f) return;
 
 	p->Health -= damage;
-	p->SurvivalDamageCooldown = 0.5f;
+	Audio_PlayOuchSound();
+	if (p->Health < 0) p->Health = 0;
+
+	if (useIFrames) p->SurvivalDamageCooldown = 0.5f;
+
+	p->HurtTilt = 8.0f;
+	p->HurtTiltDir = p->HurtTiltDir >= 0.0f ? -1.0f : 1.0f;
+
 	if (p->Health > 0) return;
 
 	Chat_AddRaw("&cYou died");
 	LocalPlayer_DoRespawn(p);
 	LocalPlayer_Heal(p);
+}
+
+static void LocalPlayer_Damage(struct LocalPlayer* p, int damage) {
+	LocalPlayer_ApplyDamage(p, damage, true);
+}
+
+static void LocalPlayer_UpdateHurtTilt(struct LocalPlayer* p, float delta) {
+	if (p->HurtTilt <= 0.0f) return;
+	p->HurtTilt -= delta * 28.0f;
+	if (p->HurtTilt < 0.0f) p->HurtTilt = 0.0f;
 }
 
 static void LocalPlayer_UpdateSprintFov(cc_bool sprinting, float delta) {
@@ -1400,32 +1529,47 @@ static void LocalPlayer_UpdateOxygen(struct LocalPlayer* p, float delta) {
 
 		if (p->Oxygen <= 0.0f && p->SurvivalOxygenCooldown <= 0.0f) {
 			p->SurvivalOxygenCooldown = 1.0f;
-			LocalPlayer_Damage(p, 2);
+			LocalPlayer_ApplyDamage(p, 2, false);
 		}
 	} else {
 		p->Oxygen += delta * 4.0f;
-		if (p->Oxygen > 20.0f) p->Oxygen = 20.0f;
+		if (p->Oxygen >= 20.0f) p->SurvivalOxygenCooldown = 0.0f;
 	}
 }
 
 static void LocalPlayer_UpdateSurvival(struct LocalPlayer* p, float delta, cc_bool wasOnGround) {
 	struct Entity* e = &p->Base;
 	float fallSpeed;
+	int fallDamage;
 
 	if (!Game_SurvivalMode || !World.Loaded) return;
-	if (p->SurvivalDamageCooldown > 0.0f) p->SurvivalDamageCooldown -= delta;
-	if (p->SurvivalLavaCooldown   > 0.0f) p->SurvivalLavaCooldown   -= delta;
+
+	if (p->SurvivalDamageCooldown > 0.0f) {
+		p->SurvivalDamageCooldown -= delta;
+		if (p->SurvivalDamageCooldown < 0.0f) p->SurvivalDamageCooldown = 0.0f;
+	}
+
+	if (p->SurvivalLavaCooldown > 0.0f) {
+		p->SurvivalLavaCooldown -= delta;
+		if (p->SurvivalLavaCooldown < 0.0f) p->SurvivalLavaCooldown = 0.0f;
+	}
 
 	LocalPlayer_UpdateOxygen(p, delta);
 
 	if (Entity_TouchesAnyLava(e) && p->SurvivalLavaCooldown <= 0.0f) {
 		p->SurvivalLavaCooldown = 0.75f;
-		LocalPlayer_Damage(p, 4);
+		LocalPlayer_ApplyDamage(p, 4, false);
 	}
+
+	if ((p->Hacks.Noclip && p->Hacks.Enabled) || p->Hacks.Flying) return;
 
 	if (!wasOnGround && e->OnGround && p->OldVelocity.y < -0.65f) {
 		fallSpeed = -p->OldVelocity.y;
-		LocalPlayer_Damage(p, (int)((fallSpeed - 0.65f) * 10.0f));
+		fallDamage = (int)((fallSpeed - 0.65f) * 10.0f);
+
+		if (fallDamage > 0) {
+			LocalPlayer_Damage(p, fallDamage);
+		}
 	}
 }
 
@@ -1462,6 +1606,7 @@ static void LocalPlayer_Tick(struct Entity* e, float delta) {
 	e->next.pos = e->Position; e->Position = e->prev.pos;
 	AnimatedComp_Update(e, e->prev.pos, e->next.pos, delta);
 	TiltComp_Update(p, &p->Tilt, delta);
+	LocalPlayer_UpdateHurtTilt(p, delta);
 	LocalPlayer_UpdateSurvival(p, delta, wasOnGround);
 
 	Entity_CheckSkin(&p->Base);
@@ -1538,6 +1683,8 @@ static void LocalPlayer_Reset(struct LocalPlayer* p) {
 	p->Oxygen = 20.0f;
 	p->Underwater = false;
 	p->SurvivalOxygenCooldown = 0.0f;
+	p->HurtTilt = 0.0f;
+	p->HurtTiltDir = 1.0f;
 	p->Sprinting = false;
 	p->SprintHeld = false;
 	p->SprintKeyDown = false;

@@ -58,6 +58,7 @@ void GenLevelScreen_Show(void);
 void ClassicGenScreen_Show(void);
 void LoadLevelScreen_Show(void);
 void SaveLevelScreen_Show(void);
+cc_result Menu_AutoSaveCurrentWorld(void);
 void TexturePackScreen_Show(void);
 void FontListScreen_Show(void);
 void HotkeyListScreen_Show(void);
