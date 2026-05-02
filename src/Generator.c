@@ -779,31 +779,99 @@ static cc_bool IslandsGen_Prepare(int seed) {
 	return NotchyGen_Prepare(seed);
 }
 
+static int ExpGen_ColumnTop(int x, int z) {
+	int y, index;
+	for (y = World.MaxY; y >= 0; y--) {
+		index = World_Pack(x, y, z);
+		if (Gen_Blocks[index] != BLOCK_AIR && Gen_Blocks[index] != BLOCK_STILL_WATER) return y;
+	}
+	return 0;
+}
+
+static void ExpGen_ClearAbove(int x, int z, int y) {
+	int yy, index;
+	for (yy = y + 1; yy < World.Height; yy++) {
+		index = World_Pack(x, yy, z);
+		Gen_Blocks[index] = BLOCK_AIR;
+	}
+}
+
+static void ExpGen_BuildLandColumn(int x, int z, int topY, BlockRaw surface) {
+	int y, index;
+	if (topY < 2) topY = 2;
+	if (topY > World.MaxY - 2) topY = World.MaxY - 2;
+
+	for (y = 0; y < World.Height; y++) {
+		index = World_Pack(x, y, z);
+		if (y == 0)              Gen_Blocks[index] = BLOCK_STONE;
+		else if (y < topY - 4)   Gen_Blocks[index] = BLOCK_STONE;
+		else if (y < topY)       Gen_Blocks[index] = BLOCK_DIRT;
+		else if (y == topY)      Gen_Blocks[index] = surface;
+		else                    Gen_Blocks[index] = BLOCK_AIR;
+	}
+}
+
+static float IslandsGen_Blob(float x, float z, float cx, float cz, float rx, float rz) {
+	float dx = (x - cx) / rx;
+	float dz = (z - cz) / rz;
+	return 1.0f - (dx * dx + dz * dz);
+}
+
+static float IslandsGen_Mask(int x, int z) {
+	float fx = (float)x, fz = (float)z;
+	float w = (float)World.Width, l = (float)World.Length;
+	float mask = -2.0f, v;
+
+	/* A Fallout-style layout: one big ragged mainland with smaller satellite islands. */
+	v = IslandsGen_Blob(fx, fz, w * 0.50f, l * 0.52f, w * 0.30f, l * 0.27f); if (v > mask) mask = v;
+	v = IslandsGen_Blob(fx, fz, w * 0.25f, l * 0.34f, w * 0.17f, l * 0.13f); if (v > mask) mask = v;
+	v = IslandsGen_Blob(fx, fz, w * 0.74f, l * 0.32f, w * 0.15f, l * 0.16f); if (v > mask) mask = v;
+	v = IslandsGen_Blob(fx, fz, w * 0.32f, l * 0.75f, w * 0.16f, l * 0.14f); if (v > mask) mask = v;
+	v = IslandsGen_Blob(fx, fz, w * 0.72f, l * 0.73f, w * 0.18f, l * 0.12f); if (v > mask) mask = v;
+
+	/* Ragged/coastline wobble, without allocating another heightmap. */
+	mask += Math_SinF(fx * 0.17f + fz * 0.09f) * 0.10f;
+	mask += Math_CosF(fx * 0.07f - fz * 0.15f) * 0.08f;
+	mask += Math_SinF((fx + fz) * 0.045f) * 0.06f;
+	return mask;
+}
+
 static void IslandsGen_Generate(void) {
-	int x, y, z, index;
-	float cx = (World.Width  - 1) * 0.5f;
-	float cz = (World.Length - 1) * 0.5f;
-	float rx = World.Width  * 0.46f;
-	float rz = World.Length * 0.46f;
-	float dx, dz, dist;
-	int sea = World.Height / 2;
+	int x, y, z, index, topY, sea;
+	float mask, ridge;
+	BlockRaw surface;
 
 	gen_suppressDone = true;
 	NotchyGen_Generate();
 	gen_suppressDone = false;
 
-	Gen_CurrentState = "Cutting island edge";
+	sea = World.Height / 2;
+	Gen_CurrentState = "Building Fallout islands";
 	for (z = 0; z < World.Length; z++) {
 		for (x = 0; x < World.Width; x++) {
-			dx = (x - cx) / rx;
-			dz = (z - cz) / rz;
-			dist = dx * dx + dz * dz;
-			if (dist <= 1.0f) continue;
+			mask = IslandsGen_Mask(x, z);
 
-			for (y = 0; y < World.Height; y++) {
-				index = World_Pack(x, y, z);
-				Gen_Blocks[index] = y <= sea ? BLOCK_STILL_WATER : BLOCK_AIR;
+			/* Ocean between island blobs */
+			if (mask < 0.0f) {
+				for (y = 0; y < World.Height; y++) {
+					index = World_Pack(x, y, z);
+					Gen_Blocks[index] = y <= sea ? BLOCK_STILL_WATER : BLOCK_AIR;
+				}
+				continue;
 			}
+
+			/* Pull coasts up slightly and make the islands dry/wasteland-like. */
+			topY = ExpGen_ColumnTop(x, z);
+			ridge = Math_SinF(x * 0.11f) + Math_CosF(z * 0.13f) + Math_SinF((x - z) * 0.05f);
+			if (topY < sea + 1) topY = sea + 1 + (int)(mask * 7.0f);
+			topY += (int)(ridge * 1.5f);
+
+			if (mask < 0.10f) surface = BLOCK_SAND;
+			else if (((x * 31 + z * 17) & 15) < 4) surface = BLOCK_GRAVEL;
+			else if (((x * 13 + z * 29) & 15) < 8) surface = BLOCK_SAND;
+			else surface = BLOCK_GRASS;
+
+			ExpGen_BuildLandColumn(x, z, topY, surface);
 		}
 		Gen_CurrentProgress = (float)z / World.Length;
 	}
@@ -820,26 +888,31 @@ static cc_bool InlandsGen_Prepare(int seed) {
 }
 
 static void InlandsGen_Generate(void) {
-	int x, y, z, index, border;
-	int sea = World.Height / 2;
+	int x, z, topY, sea, shoreRaise;
+	BlockRaw surface;
+	float roll;
 
 	gen_suppressDone = true;
 	NotchyGen_Generate();
 	gen_suppressDone = false;
 
-	Gen_CurrentState = "Building inland borders";
-	border = max(4, min(World.Width, World.Length) / 14);
+	sea = World.Height / 2;
+	Gen_CurrentState = "Building Indev inland";
 	for (z = 0; z < World.Length; z++) {
 		for (x = 0; x < World.Width; x++) {
-			if (x >= border && z >= border && x < World.Width - border && z < World.Length - border) continue;
+			topY = ExpGen_ColumnTop(x, z);
 
-			for (y = 0; y < World.Height; y++) {
-				index = World_Pack(x, y, z);
-				if (y < sea - 4) Gen_Blocks[index] = BLOCK_STONE;
-				else if (y < sea + 10) Gen_Blocks[index] = BLOCK_DIRT;
-				else if (y == sea + 10) Gen_Blocks[index] = BLOCK_GRASS;
-				else Gen_Blocks[index] = BLOCK_AIR;
-			}
+			/* Inland is the no-ocean Indev-style option: continuous landmass. */
+			roll = Math_SinF(x * 0.055f) + Math_CosF(z * 0.060f) + Math_SinF((x + z) * 0.035f);
+			shoreRaise = sea + 2 + (int)(roll * 2.0f);
+			if (topY < shoreRaise) topY = shoreRaise;
+
+			/* Sand and gravel are intentionally common here, like the old Inland setting. */
+			if (((x * 19 + z * 23) & 15) < 5) surface = BLOCK_SAND;
+			else if (((x * 37 + z * 11) & 15) < 6) surface = BLOCK_GRAVEL;
+			else surface = BLOCK_GRASS;
+
+			ExpGen_BuildLandColumn(x, z, topY, surface);
 		}
 		Gen_CurrentProgress = (float)z / World.Length;
 	}

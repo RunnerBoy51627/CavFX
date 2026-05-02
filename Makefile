@@ -74,7 +74,7 @@ ifeq ($(PLAT),mingw)
 	OEXT    =  .exe
 	CFLAGS  += -DUNICODE
 	LDFLAGS =  -g
-	LIBS    =  -mwindows -lwinmm
+	LIBS    =  -mwindows -lwinmm -lws2_32
 	BUILD_DIR = build/win
 endif
 
