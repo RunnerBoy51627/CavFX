@@ -9,8 +9,13 @@ Simple function implementations
 Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 */
 
+#ifndef min
 #define min(x, y) ((x) < (y) ? (x) : (y))
+#endif
+
+#ifndef max
 #define max(x, y) ((x) > (y) ? (x) : (y))
+#endif
 
 #define Array_Elems(arr) (sizeof(arr) / sizeof(arr[0]))
 

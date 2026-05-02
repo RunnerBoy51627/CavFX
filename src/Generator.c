@@ -15,6 +15,7 @@ BlockRaw* Gen_Blocks;
 volatile float Gen_CurrentProgress;
 volatile const char* Gen_CurrentState;
 volatile static cc_bool gen_done;
+static cc_bool gen_suppressDone;
 
 /* There are two main types of multitasking: */
 /*  - Pre-emptive multitasking (system automatically switches between threads) */
@@ -762,7 +763,7 @@ static void NotchyGen_Generate(void) {
 
 	Mem_Free(heightmap);
 	heightmap = NULL;
-	gen_done  = true;
+	if (!gen_suppressDone) gen_done = true;
 }
 
 const struct MapGenerator NotchyGen = {
@@ -787,7 +788,9 @@ static void IslandsGen_Generate(void) {
 	float dx, dz, dist;
 	int sea = World.Height / 2;
 
+	gen_suppressDone = true;
 	NotchyGen_Generate();
+	gen_suppressDone = false;
 
 	Gen_CurrentState = "Cutting island edge";
 	for (z = 0; z < World.Length; z++) {
@@ -820,7 +823,9 @@ static void InlandsGen_Generate(void) {
 	int x, y, z, index, border;
 	int sea = World.Height / 2;
 
+	gen_suppressDone = true;
 	NotchyGen_Generate();
+	gen_suppressDone = false;
 
 	Gen_CurrentState = "Building inland borders";
 	border = max(4, min(World.Width, World.Length) / 14);
