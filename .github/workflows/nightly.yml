@@ -1,4 +1,4 @@
-name: Produce nightly
+name: CavFX Nightly Builds
 
 on:
   schedule:
@@ -10,21 +10,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 🐧 LINUX BUILD
   build-linux:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
 
-      - name: Install Linux build dependencies
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxi-dev libgl1-mesa-dev
+          sudo apt-get install -y \
+            libx11-dev \
+            libxi-dev \
+            libgl1-mesa-dev \
+            libasound2-dev \
+            libpulse-dev
 
       - name: Build Linux nightly
         run: |
           make linux NIGHTLY=1 COMMIT_HASH=${GITHUB_SHA::7}
 
-      - name: Package Linux nightly
+      - name: Package Linux
         run: |
           mkdir -p CavFX
           cp CavFX CavFX/CavFX
@@ -35,3 +42,55 @@ jobs:
         with:
           name: cavfx-linux64-nightly-${{ github.sha }}
           path: cavfx-linux64-nightly-*.tar.gz
+
+
+  # 🪟 WINDOWS BUILD
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Windows nightly
+        shell: cmd
+        run: |
+          make windows NIGHTLY=1 COMMIT_HASH=%GITHUB_SHA:~0,7%
+
+      - name: Package Windows
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force CavFX
+          Copy-Item CavFX.exe CavFX/CavFX.exe
+          Compress-Archive -Path CavFX -DestinationPath "cavfx-windows-nightly-$($env:GITHUB_SHA.Substring(0,7)).zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cavfx-windows-nightly-${{ github.sha }}
+          path: cavfx-windows-nightly-*.zip
+
+  publish-nightly-release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: nightly-artifacts
+          merge-multiple: true
+
+      - name: Publish rolling nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --yes || true
+          git tag -f nightly
+          git push origin nightly --force
+
+          gh release create nightly \
+            nightly-artifacts/* \
+            --title "CavFX Nightly" \
+            --notes "Nightly build from commit ${{ github.sha }}" \
+            --prerelease
