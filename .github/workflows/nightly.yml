@@ -1,29 +1,37 @@
-name: CavFX Nightly Builds
+name: Produce nightly
 
 on:
   schedule:
     - cron: "0 5 * * *"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.ref }}-nightly
+  cancel-in-progress: true
+
 jobs:
-  build:
-    name: Build Nightly
+  build-linux:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Build CavFX
+      - name: Install Linux build dependencies
         run: |
-          make NIGHTLY=1 COMMIT_HASH=${GITHUB_SHA::7}
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxi-dev libgl1-mesa-dev
 
-      - name: Upload nightly artifact
-        uses: actions/upload-artifact@v4
+      - name: Build Linux nightly
+        run: |
+          make linux NIGHTLY=1 COMMIT_HASH=${GITHUB_SHA::7}
+
+      - name: Package Linux nightly
+        run: |
+          mkdir -p CavFX
+          cp CavFX CavFX/CavFX
+          chmod +x CavFX/CavFX
+          tar -zcvf cavfx-linux64-nightly-${GITHUB_SHA::7}.tar.gz CavFX
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: CavFX-Nightly-${{ github.sha }}
-          path: |
-            build/
-            *.exe
-            *.dll
-            *.zip
+          name: cavfx-linux64-nightly-${{ github.sha }}
+          path: cavfx-linux64-nightly-*.tar.gz
