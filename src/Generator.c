@@ -772,6 +772,82 @@ const struct MapGenerator NotchyGen = {
 
 
 /*########################################################################################################################*
+*--------------------------------------------------Experimental world types-----------------------------------------------*
+*#########################################################################################################################*/
+static cc_bool IslandsGen_Prepare(int seed) {
+	return NotchyGen_Prepare(seed);
+}
+
+static void IslandsGen_Generate(void) {
+	int x, y, z, index;
+	float cx = (World.Width  - 1) * 0.5f;
+	float cz = (World.Length - 1) * 0.5f;
+	float rx = World.Width  * 0.46f;
+	float rz = World.Length * 0.46f;
+	float dx, dz, dist;
+	int sea = World.Height / 2;
+
+	NotchyGen_Generate();
+
+	Gen_CurrentState = "Cutting island edge";
+	for (z = 0; z < World.Length; z++) {
+		for (x = 0; x < World.Width; x++) {
+			dx = (x - cx) / rx;
+			dz = (z - cz) / rz;
+			dist = dx * dx + dz * dz;
+			if (dist <= 1.0f) continue;
+
+			for (y = 0; y < World.Height; y++) {
+				index = World_Pack(x, y, z);
+				Gen_Blocks[index] = y <= sea ? BLOCK_STILL_WATER : BLOCK_AIR;
+			}
+		}
+		Gen_CurrentProgress = (float)z / World.Length;
+	}
+	gen_done = true;
+}
+
+const struct MapGenerator IslandsGen = {
+	IslandsGen_Prepare,
+	IslandsGen_Generate
+};
+
+static cc_bool InlandsGen_Prepare(int seed) {
+	return NotchyGen_Prepare(seed);
+}
+
+static void InlandsGen_Generate(void) {
+	int x, y, z, index, border;
+	int sea = World.Height / 2;
+
+	NotchyGen_Generate();
+
+	Gen_CurrentState = "Building inland borders";
+	border = max(4, min(World.Width, World.Length) / 14);
+	for (z = 0; z < World.Length; z++) {
+		for (x = 0; x < World.Width; x++) {
+			if (x >= border && z >= border && x < World.Width - border && z < World.Length - border) continue;
+
+			for (y = 0; y < World.Height; y++) {
+				index = World_Pack(x, y, z);
+				if (y < sea - 4) Gen_Blocks[index] = BLOCK_STONE;
+				else if (y < sea + 10) Gen_Blocks[index] = BLOCK_DIRT;
+				else if (y == sea + 10) Gen_Blocks[index] = BLOCK_GRASS;
+				else Gen_Blocks[index] = BLOCK_AIR;
+			}
+		}
+		Gen_CurrentProgress = (float)z / World.Length;
+	}
+	gen_done = true;
+}
+
+const struct MapGenerator InlandsGen = {
+	InlandsGen_Prepare,
+	InlandsGen_Generate
+};
+
+
+/*########################################################################################################################*
 *----------------------------------------------------Tree generation------------------------------------------------------*
 *#########################################################################################################################*/
 BlockRaw* Tree_Blocks;

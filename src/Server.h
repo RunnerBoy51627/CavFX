@@ -77,8 +77,12 @@ void Server_LeaveLAN(void);
 /* If user hasn't previously accepted url, displays a dialog asking to confirm downloading it */
 /* Otherwise just calls TexturePack_Extract */
 void Server_RetrieveTexturePack(const cc_string* url);
-/* Switches from the current connection mode and begins connecting to a multiplayer server. */
+/* Switches from the current connection mode and begins connecting to a normal ClassiCube multiplayer server. */
 void Server_ConnectTo(const cc_string* address, int port);
+/* Connects to a normal ClassiCube/external server. */
+void Server_ConnectToClassic(const cc_string* address, int port);
+/* Connects to a CavFX LAN host using CavLAN. */
+void Server_ConnectToCavLAN(const cc_string* address, int port);
 /* Opens the current singleplayer world to direct LAN clients. */
 cc_bool Server_StartLAN(int port);
 /* Closes the current LAN host, if one is running. */

@@ -5,12 +5,12 @@
 #include "Constants.h"
 #include "Http.h"
 #include "Game.h"
-#include <stdio.h>
 
+#include <stdio.h>
 #include <string.h>
 
-#define CAVFX_REPO_URL "https://github.com/RunnerBoy51627/CavFX/releases/latest"
-#define CAVFX_API_URL  "https://api.github.com/repos/RunnerBoy51627/CavFX/releases/latest"
+#define CAVFX_REPO_URL    "https://github.com/RunnerBoy51627/CavFX/releases/latest"
+#define CAVFX_VERSION_URL "https://raw.githubusercontent.com/RunnerBoy51627/CavFX/master/version.txt"
 
 #if defined CC_BUILD_WIN
 #include <windows.h>
@@ -24,83 +24,38 @@ static cc_bool updater_checked;
 static int updater_req_id = -1;
 static struct ScheduledTask2 updater_task;
 
-static cc_bool Updater_ParseTagName(const char* json, char* tag, int tagSize) {
-	const char* key;
-	const char* start;
-	const char* end;
+static void Updater_TrimVersion(char* ver) {
 	int len;
 
-	key = strstr(json, "\"tag_name\"");
-	if (!key) return false;
+	if (!ver) return;
+	len = (int)strlen(ver);
 
-	start = strchr(key, ':');
-	if (!start) return false;
+	while (len > 0) {
+		char c = ver[len - 1];
+		if (c != '\r' && c != '\n' && c != ' ' && c != '\t') break;
+		ver[--len] = '\0';
+	}
+}
 
-	start = strchr(start, '"');
-	if (!start) return false;
-	start++;
+static cc_bool Updater_CopyVersionText(struct HttpRequest* req, char* dst, int dstSize) {
+	int len;
 
-	end = strchr(start, '"');
-	if (!end) return false;
+	if (!req || !req->data || !req->size || dstSize <= 1) return false;
 
-	len = (int)(end - start);
-	if (len <= 0) return false;
-	if (len >= tagSize) len = tagSize - 1;
+	len = (int)req->size;
+	if (len >= dstSize) len = dstSize - 1;
 
-	memcpy(tag, start, len);
-	tag[len] = '\0';
-	return true;
+	memcpy(dst, req->data, len);
+	dst[len] = '\0';
+	Updater_TrimVersion(dst);
+
+	return dst[0] != '\0';
 }
 
 static cc_bool Updater_IsSameVersion(const char* latest) {
-	/* Works even if GAME_APP_VER is "0.0.1_01 Test 1"
-	   and GitHub tag is "0.0.1_01" */
-	return strstr(GAME_APP_VER, latest) == GAME_APP_VER;
-}
-
-static cc_bool Updater_PollTask(struct ScheduledTask2* task) {
-	struct HttpRequest req;
-	char latest[64];
-
-	if (updater_req_id < 0) return true;
-	if (!Http_GetResult(updater_req_id, &req)) return false;
-
-	updater_req_id = -1;
-
-	if (!req.success) {
-		/* Keep this quiet if you don't want startup spam when offline */
-		Chat_AddRaw("&eUpdater: Could not check for updates.");
-		HttpRequest_Free(&req);
-		return true;
-	}
-
-	if (req.data && Updater_ParseTagName((const char*)req.data, latest, sizeof(latest))) {
-		if (!Updater_IsSameVersion(latest)) {
-			Updater_ShowUpdatePopup(latest);
-		}
-	}
-	else {
-		Chat_AddRaw("&eUpdater: Could not parse GitHub release info.");
-	}
-
-	HttpRequest_Free(&req);
-	return true;
-}
-
-void Updater_CheckLatestOnline(void) {
-	cc_string url = String_FromReadonly(CAVFX_API_URL);
-
-	if (updater_req_id >= 0) return;
-
-	updater_req_id = Http_AsyncGetData(&url, HTTP_FLAG_NOCACHE);
-	if (updater_req_id < 0) {
-		Chat_AddRaw("&eUpdater: Could not start update check.");
-		return;
-	}
-
-	updater_task.interval = 0.25f;
-	updater_task.callback = Updater_PollTask;
-	ScheduledTask2_Add(&updater_task);
+	/* This still works if GAME_APP_VER is "0.0.1_01 Test 1"
+	   and version.txt only says "0.0.1_01". */
+	return latest && strstr(GAME_APP_VER, latest) == GAME_APP_VER;
 }
 
 void Updater_ShowUpdatePopup(const char* latestVersion) {
@@ -126,19 +81,59 @@ void Updater_ShowUpdatePopup(const char* latestVersion) {
 #endif
 }
 
+static cc_bool Updater_PollTask(struct ScheduledTask2* task) {
+	struct HttpRequest req;
+	char latest[64];
+
+	if (updater_req_id < 0) return true;
+	if (!Http_GetResult(updater_req_id, &req)) return false;
+
+	updater_req_id = -1;
+
+	if (!req.success) {
+		Chat_AddRaw("&eUpdater: Could not check for updates.");
+		HttpRequest_Free(&req);
+		return true;
+	}
+
+	if (Updater_CopyVersionText(&req, latest, sizeof(latest))) {
+		if (!Updater_IsSameVersion(latest)) {
+			Updater_ShowUpdatePopup(latest);
+		}
+	} else {
+		Chat_AddRaw("&eUpdater: Could not read version.txt.");
+	}
+
+	HttpRequest_Free(&req);
+	return true;
+}
+
+void Updater_CheckLatestOnline(void) {
+	cc_string url = String_FromReadonly(CAVFX_VERSION_URL);
+
+	if (updater_req_id >= 0) return;
+
+	updater_req_id = Http_AsyncGetData(&url, HTTP_FLAG_NOCACHE);
+	if (updater_req_id < 0) {
+		Chat_AddRaw("&eUpdater: Could not start update check.");
+		return;
+	}
+
+	updater_task.accumulator = 0.0f;
+	updater_task.interval = 0.25f;
+	updater_task.callback = Updater_PollTask;
+	ScheduledTask2_Add(&updater_task);
+}
+
 void Updater_OpenLatestRelease(void) {
 #if defined CC_BUILD_WIN
 	ShellExecuteA(NULL, "open", CAVFX_REPO_URL, NULL, NULL, SW_SHOWNORMAL);
 
 #elif defined CC_BUILD_MACOS
-	char cmd[512];
-	String_Format1(&((cc_string) { cmd, 0, sizeof(cmd) }), "open \"%c\"", CAVFX_REPO_URL);
-	system(cmd);
+	system("open \"" CAVFX_REPO_URL "\"");
 
 #elif defined CC_BUILD_LINUX
-	char cmd[512];
-	String_Format1(&((cc_string) { cmd, 0, sizeof(cmd) }), "xdg-open \"%c\"", CAVFX_REPO_URL);
-	system(cmd);
+	system("xdg-open \"" CAVFX_REPO_URL "\"");
 
 #elif defined CC_BUILD_WII
 	Chat_AddRaw("&eUpdater: Wii manual update only for now.");

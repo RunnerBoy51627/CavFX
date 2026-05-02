@@ -783,7 +783,7 @@ static void LanWorlds_JoinAddress(const char* addressRaw, int port) {
 
 	Game_ShowMainMenu = false;
 	Gui_Remove((struct Screen*)&LanWorldsScreen);
-	Server_ConnectTo(&address, port);
+	Server_ConnectToCavLAN(&address, port);
 }
 
 static void LanWorlds_JoinSelected(struct LanWorldsScreen* s) {
@@ -823,7 +823,7 @@ static void LanWorlds_UpdateButtons(struct LanWorldsScreen* s) {
 		TextWidget_Set(&s->status, &text, &s->textFont);
 		Widget_SetDisabled(&s->join, false);
 	} else {
-		TextWidget_SetConst(&s->status, "Searching for LAN worlds... Use Direct Connect if none appear.", &s->textFont);
+		TextWidget_SetConst(&s->status, "Searching for LAN worlds... Use External Connect for online servers.", &s->textFont);
 		Widget_SetDisabled(&s->join, true);
 	}
 	s->lastCount = count;
@@ -872,7 +872,7 @@ static void LanWorlds_DirectDone(const cc_string* value, cc_bool valid) {
 	Game_ShowMainMenu = false;
 	/* Close only the LAN browser, not the whole HUD/GUI stack. */
 	Gui_Remove((struct Screen*)&LanWorldsScreen);
-	Server_ConnectTo(&address, port);
+	Server_ConnectToClassic(&address, port);
 }
 
 static void LanWorlds_Direct(void* screen, void* widget) {
@@ -912,7 +912,7 @@ static void LanWorlds_ContextRecreated(void* screen) {
 	TextWidget_SetConst(&s->title, "LAN Worlds", &s->titleFont);
 	ButtonWidget_SetConst(&s->join,    "Join Server", &s->titleFont);
 	ButtonWidget_SetConst(&s->refresh, "Refresh", &s->titleFont);
-	ButtonWidget_SetConst(&s->direct,  "Direct Connect", &s->titleFont);
+	ButtonWidget_SetConst(&s->direct,  "External Connect", &s->titleFont);
 	ButtonWidget_SetConst(&s->back,    "Back", &s->titleFont);
 	LanWorlds_UpdateButtons(s);
 }
@@ -992,6 +992,7 @@ static struct CreateWorldScreen {
 	cc_bool creativeMode;
 	cc_bool structuresOn;
 	int worldSize;
+	int worldTypeID;
 	int selectedInput; /* 0 = name, 1 = seed */
 } CreateWorldScreen;
 
@@ -1007,11 +1008,49 @@ static void CreateWorldScreen_UpdateModeText(struct CreateWorldScreen* s) {
 		&s->textFont);
 }
 
+#define CAVFX_WORLD_FINITE_DEFAULT   0
+#define CAVFX_WORLD_INFINITE_DEFAULT 1
+#define CAVFX_WORLD_SUPERFLAT        2
+#define CAVFX_WORLD_ISLANDS          3
+#define CAVFX_WORLD_INLANDS          4
+#define CAVFX_WORLD_TYPE_COUNT       5
+
+static const char* CreateWorldScreen_WorldTypeName(int type) {
+	switch (type) {
+	case CAVFX_WORLD_FINITE_DEFAULT:   return "Finite Default";
+	case CAVFX_WORLD_INFINITE_DEFAULT: return "Infinite Default (!)";
+	case CAVFX_WORLD_SUPERFLAT:        return "SuperFlat";
+	case CAVFX_WORLD_ISLANDS:          return "Islands";
+	case CAVFX_WORLD_INLANDS:          return "Inlands";
+	default:                           return "Finite Default";
+	}
+}
+
+static const struct MapGenerator* CreateWorldScreen_GetGenerator(struct CreateWorldScreen* s) {
+	switch (s->worldTypeID) {
+	case CAVFX_WORLD_SUPERFLAT: return &FlatgrassGen;
+	case CAVFX_WORLD_ISLANDS:   return &IslandsGen;
+	case CAVFX_WORLD_INLANDS:   return &InlandsGen;
+	case CAVFX_WORLD_INFINITE_DEFAULT:
+		/* TODO: hook this into chunk streaming later. For now it safely generates a finite map. */
+		return &NotchyGen;
+	case CAVFX_WORLD_FINITE_DEFAULT:
+	default:
+		return &NotchyGen;
+	}
+}
+
 static void CreateWorldScreen_UpdateOptionsText(struct CreateWorldScreen* s) {
+	cc_string text; char textBuffer[STRING_SIZE];
+
 	ButtonWidget_SetConst(&s->structures,
 		s->structuresOn ? "Generate Structures: ON" : "Generate Structures: OFF",
 		&s->titleFont);
-	ButtonWidget_SetConst(&s->worldType, "World Type: Normal", &s->titleFont);
+
+	String_InitArray(text, textBuffer);
+	String_AppendConst(&text, "World Type: ");
+	String_AppendConst(&text, CreateWorldScreen_WorldTypeName(s->worldTypeID));
+	ButtonWidget_Set(&s->worldType, &text, &s->titleFont);
 }
 
 static void CreateWorldScreen_Mode(void* screen, void* widget) {
@@ -1024,6 +1063,13 @@ static void CreateWorldScreen_Mode(void* screen, void* widget) {
 static void CreateWorldScreen_Structures(void* screen, void* widget) {
 	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
 	s->structuresOn = !s->structuresOn;
+	CreateWorldScreen_UpdateOptionsText(s);
+	s->dirty = true;
+}
+
+static void CreateWorldScreen_WorldType(void* screen, void* widget) {
+	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
+	s->worldTypeID = (s->worldTypeID + 1) % CAVFX_WORLD_TYPE_COUNT;
 	CreateWorldScreen_UpdateOptionsText(s);
 	s->dirty = true;
 }
@@ -1046,7 +1092,7 @@ static void CreateWorldScreen_Create(void* screen, void* widget) {
 
 	/* Later: parse s->seedInput.base.text here */
 	Gui_Remove((struct Screen*)screen);
-	Gen_Start(&NotchyGen, seed, s->worldSize, 64, s->worldSize);
+	Gen_Start(CreateWorldScreen_GetGenerator(s), seed, s->worldSize, 64, s->worldSize);
 }
 
 static void CreateWorldScreen_Back(void* screen, void* widget) {
@@ -1156,6 +1202,7 @@ static void CreateWorldScreen_Init(void* screen) {
 	s->creativeMode = false;
 	s->structuresOn = true;
 	s->worldSize = 256;
+	s->worldTypeID = CAVFX_WORLD_FINITE_DEFAULT;
 	s->selectedInput = 0;
 
 	MenuInput_String(desc);
@@ -1174,7 +1221,7 @@ static void CreateWorldScreen_Init(void* screen) {
 	TextInputWidget_Add(s, &s->seedText, 360, &seedDefault, &desc);
 	TextWidget_Add(s, &s->seedHelp);
 	ButtonWidget_Add(s, &s->structures, 340, CreateWorldScreen_Structures);
-	ButtonWidget_Add(s, &s->worldType, 340, NULL);
+	ButtonWidget_Add(s, &s->worldType, 340, CreateWorldScreen_WorldType);
 	TextWidget_Add(s, &s->structHelp);
 	
 
@@ -1329,16 +1376,12 @@ static struct Widget* pause_widgets[1 + 6 + 2];
 static void PauseScreen_CheckHacksAllowed(void* screen) {
 	struct PauseScreen* s = (struct PauseScreen*)screen;
 
-	/* In CavLAN:
-	   Server_IsLANHosted() == host opened LAN
-	   so host should KEEP buttons.
-	   non-host LAN client should lose host-only buttons.
-	*/
+	cc_bool isExternalServer = Server.Address.length > 0;
 	cc_bool isLanHost = Server_IsLANHosted();
-	cc_bool isLanClient = !Server.IsSinglePlayer && !isLanHost;
+	cc_bool isLocalWorld = Server.IsSinglePlayer && !isExternalServer;
 
-	Widget_SetDisabled(&s->btns[2], isLanClient); /* Open To LAN */
-	Widget_SetDisabled(&s->btns[4], isLanClient); /* Save Level */
+	Widget_SetDisabled(&s->btns[2], !isLocalWorld || isLanHost); /* Open To LAN */
+	Widget_SetDisabled(&s->btns[4], !isLocalWorld);              /* Save Level */
 
 	s->dirty = true;
 }

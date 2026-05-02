@@ -23,6 +23,8 @@ struct MapGenerator {
 
 extern const struct MapGenerator FlatgrassGen;
 extern const struct MapGenerator NotchyGen;
+extern const struct MapGenerator IslandsGen;
+extern const struct MapGenerator InlandsGen;
 
 /* Starts generating a map using the given generator */
 void Gen_Start(STRING_REF const struct MapGenerator* gen, int seed,

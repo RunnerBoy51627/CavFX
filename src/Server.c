@@ -1948,7 +1948,24 @@ static void OnInit(void) {
 #endif
 }
 
-void Server_ConnectTo(const cc_string* address, int port) {
+static void Server_ConnectCommon(const cc_string* address, int port) {
+	OnClose();
+
+	Server.Address.length = 0;
+	String_Copy(&Server.Address, address);
+	Server.Port = port;
+}
+
+void Server_ConnectToClassic(const cc_string* address, int port) {
+	Server_ConnectCommon(address, port);
+
+	MPConnection_Init();
+	Protocol_Reset();
+	Game_Tasks.network.callback = Server.Tick;
+	Server.BeginConnect();
+}
+
+void Server_ConnectToCavLAN(const cc_string* address, int port) {
 	if (lan_hosting && Server_IsLoopbackAddress(address)) {
 		static const cc_string title  = String_FromConst("LAN host is already open");
 		static const cc_string reason = String_FromConst("Open another CavFX window to join 127.0.0.1. This window is the host.");
@@ -1956,15 +1973,15 @@ void Server_ConnectTo(const cc_string* address, int port) {
 		return;
 	}
 
-	OnClose();
-
-	Server.Address.length = 0;
-	String_Copy(&Server.Address, address);
-	Server.Port = port;
+	Server_ConnectCommon(address, port);
 
 	CavLanClient_Init();
 	Game_Tasks.network.callback = Server.Tick;
 	Server.BeginConnect();
+}
+
+void Server_ConnectTo(const cc_string* address, int port) {
+	Server_ConnectToClassic(address, port);
 }
 
 static void OnReset(void) {
@@ -1982,10 +1999,15 @@ static void OnFree(void) {
 }
 
 static void OnClose(void) {
+	Server.Address.length = 0;
+	Server.Port = 0;
+	lan_hosting = false;
+
 	if (Server.IsSinglePlayer) {
 		Server_StopLAN();
 		Physics_Free();
-	} else {
+	}
+	else {
 		Ping_Reset();
 		if (Server.Disconnected) return;
 
