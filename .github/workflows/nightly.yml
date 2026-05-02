@@ -1,0 +1,29 @@
+name: CavFX Nightly Builds
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Nightly
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Build CavFX
+        run: |
+          make NIGHTLY=1 COMMIT_HASH=${GITHUB_SHA::7}
+
+      - name: Upload nightly artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CavFX-Nightly-${{ github.sha }}
+          path: |
+            build/
+            *.exe
+            *.dll
+            *.zip

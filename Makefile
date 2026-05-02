@@ -217,6 +217,21 @@ ifeq ($(BEARSSL),1)
 	C_SOURCES  += $(wildcard third_party/bearssl/*.c)
 endif
 
+
+#########################################
+# CavFX nightly build metadata injection
+#########################################
+# Usage:
+#   make NIGHTLY=1
+#   make linux NIGHTLY=1 COMMIT_HASH=abc1234
+#
+# GitHub Actions can override COMMIT_HASH, but local builds will grab it from git.
+COMMIT_HASH ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo local)
+
+ifdef NIGHTLY
+	CFLAGS += -DCC_NIGHTLY_BUILD -DGAME_COMMIT_ID=\"$(COMMIT_HASH)\"
+endif
+
 ifdef RELEASE
 	CFLAGS += -O$(OPT_LEVEL)
 else

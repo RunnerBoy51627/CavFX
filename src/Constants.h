@@ -6,17 +6,28 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 */
 
 #define GAME_MAX_CMDARGS 5
+
+#ifndef GAME_COMMIT_ID
+#define GAME_COMMIT_ID "local"
+#endif
+
 #define GAME_APP_VER "0.0.1_01 Test 2"
 #define GAME_API_VER 1
 #define GAME_PHASE "Alpha "
 
+#ifdef CC_NIGHTLY_BUILD
+#define GAME_BUILD_NAME "Nightly_" GAME_COMMIT_ID
+#else
+#define GAME_BUILD_NAME GAME_PHASE GAME_APP_VER
+#endif
+
 #if defined CC_BUILD_WEB
-#define GAME_APP_ALT   "CavFX " GAME_PHASE GAME_APP_VER " web mobile"
-#define GAME_APP_NAME  "CavFX " GAME_PHASE GAME_APP_VER " web"
+#define GAME_APP_ALT   "CavFX " GAME_BUILD_NAME " web mobile"
+#define GAME_APP_NAME  "CavFX " GAME_BUILD_NAME " web"
 #define GAME_APP_TITLE "CavFX"
 #else
-#define GAME_APP_NAME  "CavFX " GAME_PHASE GAME_APP_VER
-#define GAME_APP_TITLE "CavFX " GAME_PHASE GAME_APP_VER
+#define GAME_APP_NAME  "CavFX " GAME_BUILD_NAME
+#define GAME_APP_TITLE "CavFX " GAME_BUILD_NAME
 #endif
 
 /* Max number of characters strings can have. */

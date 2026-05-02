@@ -155,5 +155,10 @@ void Updater_CheckOnStartup(void) {
 	if (updater_checked) return;
 	updater_checked = true;
 
+#ifdef CC_NIGHTLY_BUILD
+	/* Nightly builds use commit IDs, so do not compare them against stable version.txt. */
+	return;
+#endif
+
 	Updater_CheckLatestOnline();
 }

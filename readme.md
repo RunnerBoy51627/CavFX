@@ -7,6 +7,7 @@ You can **download ClassiCube** [here](https://www.classicube.net/download/) and
 **ClassiCube is not affiliated with (or supported by) Mojang AB, Minecraft, or Microsoft in any way.** <br><br>
 **ClassiCube is not trying to replicate modern Minecraft.**<br>
 **It will support survival.**
+**Nightly Builds are here. YAY!**
 
 # What ClassiCube is
 
