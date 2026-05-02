@@ -10,7 +10,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 🐧 LINUX BUILD
   build-linux:
     runs-on: ubuntu-latest
 
@@ -21,32 +20,30 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-          libx11-dev \
-          libxi-dev \
-          libgl1-mesa-dev \
-          libglu1-mesa-dev \
-          libasound2-dev \
-          libpulse-dev \
+            libx11-dev \
+            libxi-dev \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libasound2-dev \
+            libpulse-dev
 
       - name: Build Linux nightly
         run: |
           make linux NIGHTLY=1 COMMIT_HASH=${GITHUB_SHA::7}
 
       - name: Package Linux
-  run: |
-    rm -rf CavFX-nightly
-    mkdir -p CavFX-nightly
-    cp CavFX CavFX-nightly/CavFX
-    chmod +x CavFX-nightly/CavFX
-    tar -zcvf cavfx-linux64-nightly-${GITHUB_SHA::7}.tar.gz CavFX-nightly
+        run: |
+          rm -rf CavFX-nightly
+          mkdir -p CavFX-nightly
+          cp CavFX CavFX-nightly/CavFX
+          chmod +x CavFX-nightly/CavFX
+          tar -zcvf cavfx-linux64-nightly-${GITHUB_SHA::7}.tar.gz CavFX-nightly
 
       - uses: actions/upload-artifact@v4
         with:
           name: cavfx-linux64-nightly-${{ github.sha }}
           path: cavfx-linux64-nightly-*.tar.gz
 
-
-  # 🪟 WINDOWS BUILD
   build-windows:
     runs-on: windows-latest
 
@@ -61,9 +58,10 @@ jobs:
       - name: Package Windows
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force CavFX
-          Copy-Item CavFX.exe CavFX/CavFX.exe
-          Compress-Archive -Path CavFX -DestinationPath "cavfx-windows-nightly-$($env:GITHUB_SHA.Substring(0,7)).zip"
+          Remove-Item -Recurse -Force CavFX-nightly -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force CavFX-nightly
+          Copy-Item CavFX.exe CavFX-nightly/CavFX.exe
+          Compress-Archive -Path CavFX-nightly -DestinationPath "cavfx-windows-nightly-$($env:GITHUB_SHA.Substring(0,7)).zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -73,11 +71,12 @@ jobs:
   publish-nightly-release:
     needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
-
     permissions:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: nightly-artifacts
