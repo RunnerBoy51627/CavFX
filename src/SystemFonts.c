@@ -600,11 +600,12 @@ static void SysFonts_Add(const cc_string* path, FT_Face face, int index, char ty
 	cc_string value; char valueBuffer[FILENAME_SIZE];
 	cc_string style = String_Empty;
 
-	if (!face->family_name || !(face->face_flags & FT_FACE_FLAG_SCALABLE)) return;
+	if (!path || !path->buffer || !path->length) return;
+	if (!face || !face->family_name || !(face->face_flags & FT_FACE_FLAG_SCALABLE)) return;
 	/* don't want 'Arial Regular' or 'Arial Bold' */
-	if (face->style_name) {
+	if (face->style_name && face->style_name[0]) {
 		style = String_FromReadonly(face->style_name);
-		if (String_CaselessEqualsConst(&style, defStyle)) style.length = 0;
+		if (defStyle && String_CaselessEqualsConst(&style, defStyle)) style.length = 0;
 	}
 	if (SysFonts_SkipFont(face)) type = 'X';
 
