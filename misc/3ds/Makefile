@@ -58,6 +58,12 @@ DEPFILES := $(OBJS:%.o=%.d)
 #---------------------------------------------------------------------------------
 ARCH	= -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 CFLAGS	= -g -Wall -O2 -mword-relocations -ffunction-sections $(ARCH) $(INCLUDE) -D__3DS__ -DPLAT_3DS
+
+COMMIT_HASH ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo local)
+
+ifdef NIGHTLY
+CFLAGS += -DCC_NIGHTLY_BUILD -DGAME_COMMIT_ID=\"$(COMMIT_HASH)\"
+endif
 ASFLAGS	= -g $(ARCH)
 
 LDFLAGS	= -specs=3dsx.specs -g $(ARCH)

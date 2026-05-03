@@ -354,3 +354,10 @@ public/CavFX.js
 public/CavFX.wasm
 public/CavFX.data
 .firebase/
+
+# --- CavFX Preload override ---
+!src/preload/
+!src/preload/**
+!src/preload/**/*.png
+!src/preload/**/*.ogg
+!src/preload/**/*.zip

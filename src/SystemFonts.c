@@ -12,6 +12,48 @@
 #include "Errors.h"
 #include "Window.h"
 #include "Options.h"
+#include <string.h>
+#include <stddef.h>
+#include <stdlib.h>
+
+/* GLOBAL wrappers for FreeType */
+int cc_strncmp(const char* a, const char* b, size_t n) {
+	if (!a) a = "";
+	if (!b) b = "";
+	return strncmp(a, b, n);
+}
+
+int cc_strcmp(const char* a, const char* b) {
+	if (!a) a = "";
+	if (!b) b = "";
+	return strcmp(a, b);
+}
+
+size_t cc_strlen(const char* a) {
+	return a ? strlen(a) : 0;
+}
+
+char* cc_strstr(const char* a, const char* b) {
+	if (!a) a = "";
+	if (!b) b = "";
+	return (char*)strstr(a, b);
+}
+
+int cc_memcmp(const void* a, const void* b, size_t n) {
+	if (!a || !b) return a == b ? 0 : (a ? 1 : -1);
+	return memcmp(a, b, n);
+}
+
+void* cc_memchr(const void* a, int c, size_t n) {
+	if (!a) return NULL;
+	return memchr(a, c, n);
+}
+
+void cc_qsort(void* v, size_t count, size_t size,
+	int (*comp)(const void*, const void*)) {
+	if (!v || !count || !size || !comp) return;
+	qsort(v, count, size, comp);
+}
 
 static char defaultBuffer[STRING_SIZE];
 static cc_string font_default = String_FromArray(defaultBuffer);
@@ -287,6 +329,62 @@ int FallbackFont_Plot(cc_uint8 c, FallbackFont_Plotter plotter, int scale, void*
 *--------------------------------------------------------Freetype---------------------------------------------------------*
 *#########################################################################################################################*/
 #if defined CC_BUILD_FREETYPE
+
+#if defined(CC_BUILD_WIN) || defined(_WIN32)
+/*
+ * CavFX Windows + FreeType safe path
+ * ----------------------------------
+ * Nightly MinGW builds were entering the FreeType system-font enumeration path
+ * and crashing in SysFonts_GetNames -> String_FromReadonly(NULL).
+ *
+ * Keep the real bitmap font renderer enabled on Windows instead of stubbing the
+ * file out. This avoids platform font enumeration while still rendering text.
+ */
+void SysFonts_SaveCache(void) { }
+
+cc_result SysFonts_Register(const cc_string* path, SysFont_RegisterCallback callback) {
+	return ERR_NOT_SUPPORTED;
+}
+
+const cc_string* SysFonts_UNSAFE_GetDefault(void) {
+	return &String_Empty;
+}
+
+void SysFonts_GetNames(struct StringsBuffer* buffer) {
+	/* No dynamic Windows font enumeration in this build path. */
+	(void)buffer;
+}
+
+cc_result SysFont_Make(struct FontDesc* desc, const cc_string* fontName, int size, int flags) {
+	(void)fontName;
+
+	size *= DisplayInfo.ScaleY;
+	size = CC_ALIGNUP(size, 8); /* Ensure sizes below 8 don't get rounded down to 0 */
+
+	desc->size   = size;
+	desc->flags  = flags;
+	desc->height = Drawer2D_AdjHeight(size);
+	desc->handle = (void*)1;
+	return 0;
+}
+
+void SysFont_MakeDefault(struct FontDesc* desc, int size, int flags) {
+	SysFont_Make(desc, NULL, size, flags);
+}
+
+void SysFont_Free(struct FontDesc* desc) {
+	if (!desc) return;
+	desc->handle = NULL;
+}
+
+int SysFont_TextWidth(struct DrawTextArgs* args) {
+	return FallbackFont_TextWidth(args);
+}
+
+void SysFont_DrawText(struct DrawTextArgs* args, struct Bitmap* bmp, int x, int y, cc_bool shadow) {
+	FallbackFont_DrawText(args, bmp, x, y, shadow);
+}
+#else
 #include "freetype/ft2build.h"
 #include "freetype/freetype.h"
 #include "freetype/ftmodapi.h"
@@ -600,12 +698,11 @@ static void SysFonts_Add(const cc_string* path, FT_Face face, int index, char ty
 	cc_string value; char valueBuffer[FILENAME_SIZE];
 	cc_string style = String_Empty;
 
-	if (!path || !path->buffer || !path->length) return;
-	if (!face || !face->family_name || !(face->face_flags & FT_FACE_FLAG_SCALABLE)) return;
+	if (!face->family_name || !(face->face_flags & FT_FACE_FLAG_SCALABLE)) return;
 	/* don't want 'Arial Regular' or 'Arial Bold' */
-	if (face->style_name && face->style_name[0]) {
+	if (face->style_name) {
 		style = String_FromReadonly(face->style_name);
-		if (defStyle && String_CaselessEqualsConst(&style, defStyle)) style.length = 0;
+		if (String_CaselessEqualsConst(&style, defStyle)) style.length = 0;
 	}
 	if (SysFonts_SkipFont(face)) type = 'X';
 
@@ -978,6 +1075,7 @@ void SysFont_DrawText(struct DrawTextArgs* args, struct Bitmap* bmp, int x, int 
 
 	if (shadow) FT_Set_Transform(face, NULL, NULL);
 }
+#endif /* defined(CC_BUILD_WIN) || defined(_WIN32) */
 #elif defined CC_BUILD_WEB
 static cc_string font_arial = String_FromConst("Arial");
 

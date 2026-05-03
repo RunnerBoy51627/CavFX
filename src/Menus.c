@@ -1133,7 +1133,7 @@ static void CreateWorldScreen_ContextRecreated(void* screen) {
 
 	TextWidget_SetConst(&s->seedLabel, "Seed for the World Generator", &s->textFont);
 	TextWidget_SetConst(&s->seedHelp, "Leave blank for a random seed", &s->textFont);
-	TextWidget_SetConst(&s->structHelp, "Villages, dungeons etc", &s->textFont);
+	//TextWidget_SetConst(&s->structHelp, "Villages, dungeons etc", &s->textFont);
 
 	CreateWorldScreen_UpdateModeText(s);
 	CreateWorldScreen_UpdateOptionsText(s);
@@ -1162,11 +1162,11 @@ static void CreateWorldScreen_Layout(void* screen) {
 	Widget_SetLocation(&s->seedHelp, ANCHOR_CENTRE, ANCHOR_MIN, 0, 270);
 
 	/* middle options */
-	Widget_SetLocation(&s->mode, ANCHOR_CENTRE, ANCHOR_MIN, 0, 330);
-	Widget_SetLocation(&s->desc, ANCHOR_CENTRE, ANCHOR_MIN, 0, 374);
-	Widget_SetLocation(&s->structures, ANCHOR_CENTRE, ANCHOR_MIN, 0, 430);
-	Widget_SetLocation(&s->worldType, ANCHOR_CENTRE, ANCHOR_MIN, 0, 486);
-	Widget_SetLocation(&s->structHelp, ANCHOR_CENTRE, ANCHOR_MIN, 0, 528);
+	Widget_SetLocation(&s->mode, ANCHOR_CENTRE, ANCHOR_MIN, 0, 300);
+	Widget_SetLocation(&s->desc, ANCHOR_CENTRE, ANCHOR_MIN, 0, 350);
+	Widget_SetLocation(&s->structures, ANCHOR_CENTRE, ANCHOR_MIN, -185, 375);
+	Widget_SetLocation(&s->worldType, ANCHOR_CENTRE, ANCHOR_MIN, 185, 375);
+	//Widget_SetLocation(&s->structHelp, ANCHOR_CENTRE, ANCHOR_MIN, 0, 528);
 
 	/* bottom buttons */
 	Widget_SetLocation(&s->create, ANCHOR_CENTRE, ANCHOR_MAX, -185, 22);

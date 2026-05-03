@@ -39,6 +39,12 @@ DEPFILES := $(OBJS:%.o=%.d)
 MACHDEP = -DGEKKO -mrvl -mcpu=750 -meabi -mhard-float
 CFLAGS	= -g -O2 -Wall $(MACHDEP) -I$(DEVKITPRO)/libogc/include -DPLAT_WII
 
+COMMIT_HASH ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo local)
+
+ifdef NIGHTLY
+CFLAGS += -DCC_NIGHTLY_BUILD -DGAME_COMMIT_ID=\"$(COMMIT_HASH)\"
+endif
+
 LDFLAGS	= -g $(MACHDEP) -L$(DEVKITPRO)/libogc/lib/wii
 # Additional libraries to link against
 LIBS	= -lasnd -lwiikeyboard -lwiiuse -lbte -lfat -logc -lm
