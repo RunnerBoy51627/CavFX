@@ -991,8 +991,8 @@ static struct CreateWorldScreen {
 
 	cc_bool creativeMode;
 	cc_bool structuresOn;
+	int selectedWorldType; /* 0 finite default, 1 infinite default experimental */
 	int worldSize;
-	int worldTypeID;
 	int selectedInput; /* 0 = name, 1 = seed */
 } CreateWorldScreen;
 
@@ -1008,49 +1008,13 @@ static void CreateWorldScreen_UpdateModeText(struct CreateWorldScreen* s) {
 		&s->textFont);
 }
 
-#define CAVFX_WORLD_FINITE_DEFAULT   0
-#define CAVFX_WORLD_INFINITE_DEFAULT 1
-#define CAVFX_WORLD_SUPERFLAT        2
-#define CAVFX_WORLD_ISLANDS          3
-#define CAVFX_WORLD_INLANDS          4
-#define CAVFX_WORLD_TYPE_COUNT       5
-
-static const char* CreateWorldScreen_WorldTypeName(int type) {
-	switch (type) {
-	case CAVFX_WORLD_FINITE_DEFAULT:   return "Finite Default";
-	case CAVFX_WORLD_INFINITE_DEFAULT: return "Infinite Default (!)";
-	case CAVFX_WORLD_SUPERFLAT:        return "SuperFlat";
-	case CAVFX_WORLD_ISLANDS:          return "Islands";
-	case CAVFX_WORLD_INLANDS:          return "Inlands";
-	default:                           return "Finite Default";
-	}
-}
-
-static const struct MapGenerator* CreateWorldScreen_GetGenerator(struct CreateWorldScreen* s) {
-	switch (s->worldTypeID) {
-	case CAVFX_WORLD_SUPERFLAT: return &FlatgrassGen;
-	case CAVFX_WORLD_ISLANDS:   return &IslandsGen;
-	case CAVFX_WORLD_INLANDS:   return &InlandsGen;
-	case CAVFX_WORLD_INFINITE_DEFAULT:
-		/* TODO: hook this into chunk streaming later. For now it safely generates a finite map. */
-		return &NotchyGen;
-	case CAVFX_WORLD_FINITE_DEFAULT:
-	default:
-		return &NotchyGen;
-	}
-}
-
 static void CreateWorldScreen_UpdateOptionsText(struct CreateWorldScreen* s) {
-	cc_string text; char textBuffer[STRING_SIZE];
-
 	ButtonWidget_SetConst(&s->structures,
 		s->structuresOn ? "Generate Structures: ON" : "Generate Structures: OFF",
 		&s->titleFont);
-
-	String_InitArray(text, textBuffer);
-	String_AppendConst(&text, "World Type: ");
-	String_AppendConst(&text, CreateWorldScreen_WorldTypeName(s->worldTypeID));
-	ButtonWidget_Set(&s->worldType, &text, &s->titleFont);
+	ButtonWidget_SetConst(&s->worldType,
+		s->selectedWorldType ? "World Type: Infinite Default (!)" : "World Type: Finite Default",
+		&s->titleFont);
 }
 
 static void CreateWorldScreen_Mode(void* screen, void* widget) {
@@ -1069,7 +1033,7 @@ static void CreateWorldScreen_Structures(void* screen, void* widget) {
 
 static void CreateWorldScreen_WorldType(void* screen, void* widget) {
 	struct CreateWorldScreen* s = (struct CreateWorldScreen*)screen;
-	s->worldTypeID = (s->worldTypeID + 1) % CAVFX_WORLD_TYPE_COUNT;
+	s->selectedWorldType = (s->selectedWorldType + 1) % 2;
 	CreateWorldScreen_UpdateOptionsText(s);
 	s->dirty = true;
 }
@@ -1092,7 +1056,15 @@ static void CreateWorldScreen_Create(void* screen, void* widget) {
 
 	/* Later: parse s->seedInput.base.text here */
 	Gui_Remove((struct Screen*)screen);
-	Gen_Start(CreateWorldScreen_GetGenerator(s), seed, s->worldSize, 64, s->worldSize);
+	if (s->selectedWorldType) {
+		Window_ShowDialog("Experimental world",
+			"Infinite Worlds are experimental! Some may crash.\n"
+			"This v1 streams chunks by rebuilding a 256x256 window around you.");
+		Gen_Start(&CavFXInfiniteGen, seed, 256, 64, 256);
+	} else {
+		CavFXInfiniteChunks_Disable();
+		Gen_Start(&NotchyGen, seed, s->worldSize, 64, s->worldSize);
+	}
 }
 
 static void CreateWorldScreen_Back(void* screen, void* widget) {
@@ -1133,7 +1105,7 @@ static void CreateWorldScreen_ContextRecreated(void* screen) {
 
 	TextWidget_SetConst(&s->seedLabel, "Seed for the World Generator", &s->textFont);
 	TextWidget_SetConst(&s->seedHelp, "Leave blank for a random seed", &s->textFont);
-	//TextWidget_SetConst(&s->structHelp, "Villages, dungeons etc", &s->textFont);
+	TextWidget_SetConst(&s->structHelp, "Villages, dungeons etc", &s->textFont);
 
 	CreateWorldScreen_UpdateModeText(s);
 	CreateWorldScreen_UpdateOptionsText(s);
@@ -1162,11 +1134,11 @@ static void CreateWorldScreen_Layout(void* screen) {
 	Widget_SetLocation(&s->seedHelp, ANCHOR_CENTRE, ANCHOR_MIN, 0, 270);
 
 	/* middle options */
-	Widget_SetLocation(&s->mode, ANCHOR_CENTRE, ANCHOR_MIN, 0, 300);
-	Widget_SetLocation(&s->desc, ANCHOR_CENTRE, ANCHOR_MIN, 0, 350);
-	Widget_SetLocation(&s->structures, ANCHOR_CENTRE, ANCHOR_MIN, -185, 375);
-	Widget_SetLocation(&s->worldType, ANCHOR_CENTRE, ANCHOR_MIN, 185, 375);
-	//Widget_SetLocation(&s->structHelp, ANCHOR_CENTRE, ANCHOR_MIN, 0, 528);
+	Widget_SetLocation(&s->mode, ANCHOR_CENTRE, ANCHOR_MIN, 0, 330);
+	Widget_SetLocation(&s->desc, ANCHOR_CENTRE, ANCHOR_MIN, 0, 374);
+	Widget_SetLocation(&s->structures, ANCHOR_CENTRE, ANCHOR_MIN, 0, 430);
+	Widget_SetLocation(&s->worldType, ANCHOR_CENTRE, ANCHOR_MIN, 0, 486);
+	Widget_SetLocation(&s->structHelp, ANCHOR_CENTRE, ANCHOR_MIN, 0, 528);
 
 	/* bottom buttons */
 	Widget_SetLocation(&s->create, ANCHOR_CENTRE, ANCHOR_MAX, -185, 22);
@@ -1201,8 +1173,8 @@ static void CreateWorldScreen_Init(void* screen) {
 
 	s->creativeMode = false;
 	s->structuresOn = true;
+	s->selectedWorldType = 0;
 	s->worldSize = 256;
-	s->worldTypeID = CAVFX_WORLD_FINITE_DEFAULT;
 	s->selectedInput = 0;
 
 	MenuInput_String(desc);

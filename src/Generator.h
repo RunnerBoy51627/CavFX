@@ -20,11 +20,16 @@ struct MapGenerator {
 	cc_bool (*Prepare)(int seed);
 	void   (*Generate)(void);
 };
+struct IGameComponent;
 
 extern const struct MapGenerator FlatgrassGen;
 extern const struct MapGenerator NotchyGen;
-extern const struct MapGenerator IslandsGen;
-extern const struct MapGenerator InlandsGen;
+extern const struct MapGenerator CavFXInfiniteGen;
+
+extern cc_bool CavFXInfiniteChunks_Active;
+extern struct IGameComponent CavFXInfiniteChunks_Component;
+void CavFXInfiniteChunks_Disable(void);
+void CavFXInfiniteChunks_Begin(int seed);
 
 /* Starts generating a map using the given generator */
 void Gen_Start(STRING_REF const struct MapGenerator* gen, int seed,

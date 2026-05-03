@@ -42,6 +42,7 @@
 #include "Formats.h"
 #include "EntityRenderers.h"
 #include "Updater.h"
+#include "Generator.h"
 
 struct _GameData Game;
 static cc_uint64 frameStart;
@@ -491,6 +492,7 @@ static void Game_Load(void) {
 	Game_AddComponent(&AxisLinesRenderer_Component);
 	Game_AddComponent(&Formats_Component);
 	Game_AddComponent(&EntityRenderers_Component);
+	Game_AddComponent(&CavFXInfiniteChunks_Component);
 
 	LoadPlugins();
 	for (comp = comps_head; comp; comp = comp->next) {

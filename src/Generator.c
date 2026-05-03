@@ -8,6 +8,9 @@
 #include "Game.h"
 #include "Screens.h"
 #include "Window.h"
+#include "Entity.h"
+#include "MapRenderer.h"
+#include "Chat.h"
 
 static const struct MapGenerator* gen_active;
 BlockRaw* Gen_Blocks;
@@ -771,350 +774,178 @@ const struct MapGenerator NotchyGen = {
 };
 
 
+
 /*########################################################################################################################*
-*--------------------------------------------------Experimental world types-----------------------------------------------*
+*--------------------------------------------CavFX experimental infinite chunks-------------------------------------------*
 *#########################################################################################################################*/
-static cc_bool IslandsGen_Prepare(int seed) {
-	Random_Seed(&rnd, seed);
-	waterLevel = World.Height / 2;
-	minHeight  = World.Height;
-	heightmap  = NULL;
-	return true;
-}
 
-static cc_bool ExpGen_IsTerrainBlock(BlockRaw block) {
-	if (block == BLOCK_AIR || block == BLOCK_WATER || block == BLOCK_STILL_WATER) return false;
-	if (block == BLOCK_LAVA || block == BLOCK_STILL_LAVA) return false;
-	if (block == BLOCK_LOG || block == BLOCK_LEAVES || block == BLOCK_SAPLING) return false;
-	if (block == BLOCK_DANDELION || block == BLOCK_ROSE) return false;
-	if (block == BLOCK_BROWN_SHROOM || block == BLOCK_RED_SHROOM) return false;
-	return true;
-}
+#define CAVFX_INF_CHUNK_SIZE 16
+#define CAVFX_INF_WORLD_SIZE 256
+#define CAVFX_INF_SHIFT_CHUNKS 4
+#define CAVFX_INF_BORDER 56
 
-static int ExpGen_ColumnTop(int x, int z) {
-	int y, index;
-	BlockRaw block;
-	for (y = World.MaxY; y >= 0; y--) {
-		index = World_Pack(x, y, z);
-		block = Gen_Blocks[index];
-		if (ExpGen_IsTerrainBlock(block)) return y;
-	}
-	return 0;
-}
+cc_bool CavFXInfiniteChunks_Active;
+static int cavfx_inf_seed;
+static int cavfx_inf_originChunkX, cavfx_inf_originChunkZ;
+static cc_bool cavfx_inf_loadedOnce;
 
-static void ExpGen_BuildLandColumn(int x, int z, int topY, BlockRaw surface) {
-	int y, index;
-	if (topY < 2) topY = 2;
-	if (topY > World.MaxY - 2) topY = World.MaxY - 2;
-
-	for (y = 0; y < World.Height; y++) {
-		index = World_Pack(x, y, z);
-		if (y == 0)              Gen_Blocks[index] = BLOCK_STONE;
-		else if (y < topY - 4)   Gen_Blocks[index] = BLOCK_STONE;
-		else if (y < topY)       Gen_Blocks[index] = BLOCK_DIRT;
-		else if (y == topY)      Gen_Blocks[index] = surface;
-		else                    Gen_Blocks[index] = BLOCK_AIR;
-	}
-}
-
-static void ExpGen_BuildWaterColumn(int x, int z, int topY, int sea, BlockRaw surface) {
-	int y, index;
-	BlockRaw block;
-
-	if (topY < 2) topY = 2;
-	if (topY > World.MaxY - 3) topY = World.MaxY - 3;
-
-	for (y = 0; y < World.Height; y++) {
-		index = World_Pack(x, y, z);
-		if (y == 0)             block = BLOCK_STONE;
-		else if (y < topY - 4)  block = BLOCK_STONE;
-		else if (y < topY)      block = BLOCK_DIRT;
-		else if (y == topY)     block = surface;
-		else if (y <= sea)      block = BLOCK_STILL_WATER;
-		else                   block = BLOCK_AIR;
-		Gen_Blocks[index] = block;
-	}
-}
-
-static cc_uint32 ExpGen_Hash(int x, int z, int salt) {
-	cc_uint32 h = (cc_uint32)World.Seed;
-	h ^= (cc_uint32)(x * 374761393);
-	h ^= (cc_uint32)(z * 668265263);
-	h ^= (cc_uint32)(salt * 1442695041);
-	h = (h ^ (h >> 13)) * 1274126177;
+static cc_uint32 CavFXInf_Hash(int x, int z, int salt) {
+	cc_uint32 h = (cc_uint32)(x * 374761393u) ^ (cc_uint32)(z * 668265263u) ^ (cc_uint32)(salt * 1442695041u);
+	h = (h ^ (h >> 13)) * 1274126177u;
 	return h ^ (h >> 16);
 }
 
-static float ExpGen_ValueNoise(int x, int z, int salt) {
-	return (ExpGen_Hash(x, z, salt) & 0xFFFF) / 65535.0f;
+static int CavFXInf_ValueNoise(int x, int z, int scale, int salt) {
+	int gx = x >= 0 ? x / scale : -((-x + scale - 1) / scale);
+	int gz = z >= 0 ? z / scale : -((-z + scale - 1) / scale);
+	int lx = x - gx * scale;
+	int lz = z - gz * scale;
+	int a = (int)(CavFXInf_Hash(gx,     gz,     salt) & 255);
+	int b = (int)(CavFXInf_Hash(gx + 1, gz,     salt) & 255);
+	int c = (int)(CavFXInf_Hash(gx,     gz + 1, salt) & 255);
+	int d = (int)(CavFXInf_Hash(gx + 1, gz + 1, salt) & 255);
+	int ab = a + ((b - a) * lx) / scale;
+	int cd = c + ((d - c) * lx) / scale;
+	return ab + ((cd - ab) * lz) / scale;
 }
 
-static float ExpGen_SmoothNoise(float x, float z, float scale, int salt) {
-	int x0, z0, x1, z1;
-	float fx, fz, a, b, c, d, ab, cd;
-	x /= scale; z /= scale;
-	x0 = Math_Floor(x); z0 = Math_Floor(z);
-	x1 = x0 + 1;        z1 = z0 + 1;
-	fx = x - x0;        fz = z - z0;
-
-	/* Smoothstep, so patches blend instead of becoming checkerboard/static. */
-	fx = fx * fx * (3.0f - 2.0f * fx);
-	fz = fz * fz * (3.0f - 2.0f * fz);
-
-	a  = ExpGen_ValueNoise(x0, z0, salt);
-	b  = ExpGen_ValueNoise(x1, z0, salt);
-	c  = ExpGen_ValueNoise(x0, z1, salt);
-	d  = ExpGen_ValueNoise(x1, z1, salt);
-	ab = Math_Lerp(a, b, fx);
-	cd = Math_Lerp(c, d, fx);
-	return Math_Lerp(ab, cd, fz);
+static int CavFXInf_HeightAt(int worldX, int worldZ) {
+	int base   = CavFXInf_ValueNoise(worldX, worldZ, 64, cavfx_inf_seed + 11);
+	int hills  = CavFXInf_ValueNoise(worldX, worldZ, 24, cavfx_inf_seed + 23);
+	int detail = CavFXInf_ValueNoise(worldX, worldZ,  9, cavfx_inf_seed + 37);
+	int h = 29 + ((base - 128) / 14) + ((hills - 128) / 18) + ((detail - 128) / 48);
+	if (h < 8) h = 8;
+	if (h > World.Height - 6) h = World.Height - 6;
+	return h;
 }
 
-static float ExpGen_Fbm(float x, float z, float scale, int salt) {
-	float n = 0.0f;
-	n += ExpGen_SmoothNoise(x, z, scale,       salt)     * 0.55f;
-	n += ExpGen_SmoothNoise(x, z, scale * 0.5f, salt+13) * 0.30f;
-	n += ExpGen_SmoothNoise(x, z, scale * 0.25f,salt+29) * 0.15f;
-	return n;
-}
-
-static BlockRaw ExpGen_SurfaceFromPatch(int x, int z, float scale, float sandCut, float gravelCut) {
-	float mat = ExpGen_Fbm((float)x, (float)z, scale, 8001);
-	if (mat < sandCut)   return BLOCK_SAND;
-	if (mat < gravelCut) return BLOCK_GRAVEL;
+static BlockRaw CavFXInf_TopBlockAt(int worldX, int worldZ, int height, int waterLevel) {
+	int mat = CavFXInf_ValueNoise(worldX, worldZ, 32, cavfx_inf_seed + 51);
+	if (height <= waterLevel + 1) return BLOCK_SAND;
+	if (mat > 218) return BLOCK_GRAVEL;
+	if (mat < 36)  return BLOCK_SAND;
 	return BLOCK_GRASS;
 }
 
-static float IslandsGen_Blob(float x, float z, float cx, float cz, float rx, float rz) {
-	float dx = (x - cx) / rx;
-	float dz = (z - cz) / rz;
-	float v  = 1.0f - (dx * dx + dz * dz);
-	return v < 0.0f ? 0.0f : v;
+static void CavFXInf_GenColumn(BlockRaw* blocks, int localX, int localZ, int worldX, int worldZ) {
+	int y, index;
+	int height = CavFXInf_HeightAt(worldX, worldZ);
+	int waterLevel = World.Height / 2;
+	BlockRaw top = CavFXInf_TopBlockAt(worldX, worldZ, height, waterLevel);
+	for (y = 0; y < World.Height; y++) {
+		BlockRaw block = BLOCK_AIR;
+		if (y == 0) block = BLOCK_BEDROCK;
+		else if (y < height - 4) block = BLOCK_STONE;
+		else if (y < height - 1) block = BLOCK_DIRT;
+		else if (y == height - 1) block = top;
+		else if (y <= waterLevel) block = BLOCK_STILL_WATER;
+		index = World_Pack(localX, y, localZ);
+		blocks[index] = block;
+	}
 }
 
-static float IslandsGen_Mask(int x, int z) {
-	float fx = (float)x, fz = (float)z;
-	float w = (float)World.Width, l = (float)World.Length;
-	float cx = w * 0.50f, cz = l * 0.52f;
-	float dx, dz, dist, mask, warp, sat, v;
-
-	/* Indev Island = Inland terrain cut by a strong island falloff.
-	   Warp x/z before measuring distance so the coastline is not a perfect circle. */
-	warp  = (ExpGen_Fbm(fx, fz, 86.0f, 4411) - 0.5f) * 34.0f;
-	dx    = (fx + warp) - cx;
-	warp  = (ExpGen_Fbm(fx, fz, 91.0f, 4427) - 0.5f) * 30.0f;
-	dz    = (fz + warp) - cz;
-
-	/* Slightly elliptical, fills most of the map like the classic preview. */
-	dx /= w * 0.43f;
-	dz /= l * 0.36f;
-	dist = Math_SqrtF(dx * dx + dz * dz);
-
-	mask = 1.0f - dist;
-	if (mask < 0.0f) mask = 0.0f;
-
-	/* Smooth, broad beaches. Squaring was making the land too tiny/round. */
-	mask = mask * (1.65f - 0.65f * mask);
-
-	/* Ragged coast, but low frequency only -- no TV static shoreline. */
-	mask += (ExpGen_Fbm(fx, fz, 44.0f, 4501) - 0.5f) * 0.22f;
-	mask += (ExpGen_Fbm(fx, fz, 21.0f, 4517) - 0.5f) * 0.08f;
-
-	/* Satellite islands around the main landmass. */
-	sat = 0.0f;
-	v = IslandsGen_Blob(fx, fz, w * 0.18f, l * 0.23f, w * 0.095f, l * 0.070f); if (v > sat) sat = v;
-	v = IslandsGen_Blob(fx, fz, w * 0.80f, l * 0.30f, w * 0.115f, l * 0.075f); if (v > sat) sat = v;
-	v = IslandsGen_Blob(fx, fz, w * 0.73f, l * 0.78f, w * 0.095f, l * 0.085f); if (v > sat) sat = v;
-	v = IslandsGen_Blob(fx, fz, w * 0.34f, l * 0.86f, w * 0.080f, l * 0.055f); if (v > sat) sat = v;
-	v = IslandsGen_Blob(fx, fz, w * 0.58f, l * 0.14f, w * 0.065f, l * 0.050f); if (v > sat) sat = v;
-
-	if (sat > mask) mask = sat * 0.82f;
-	return mask;
-}
-
-static void IslandsGen_Generate(void) {
-	int x, z, y, topY, sea;
-	float mask, large, medium, detail, lake, beachNoise;
-	BlockRaw surface;
-	cc_bool canPlantTrees;
-
-	/* IMPORTANT: do NOT call NotchyGen_Generate() here.
-	   The experimental generators rebuild the map from scratch. Calling the
-	   normal generator first can mark gen_done/double-free heightmap and leave
-	   partially edited worlds/void gaps. */
-	sea = World.Height / 2;
-	Gen_CurrentState = "Building Indev island";
-
-	Mem_Free(heightmap);
-	heightmap = (cc_int16*)Mem_TryAlloc(World.Width * World.Length, 2);
-	canPlantTrees = heightmap != NULL;
-
+static void CavFXInf_GenerateWindow(BlockRaw* blocks) {
+	int x, z, worldX, worldZ;
+	int baseX = cavfx_inf_originChunkX * CAVFX_INF_CHUNK_SIZE;
+	int baseZ = cavfx_inf_originChunkZ * CAVFX_INF_CHUNK_SIZE;
+	Gen_CurrentState = "Generating infinite chunk window";
 	for (z = 0; z < World.Length; z++) {
 		for (x = 0; x < World.Width; x++) {
-			mask = IslandsGen_Mask(x, z);
-
-			large  = (ExpGen_Fbm((float)x, (float)z, 112.0f, 4601) - 0.5f) * 16.0f;
-			medium = (ExpGen_Fbm((float)x, (float)z,  52.0f, 4631) - 0.5f) *  7.0f;
-			detail = (ExpGen_Fbm((float)x, (float)z,  25.0f, 4661) - 0.5f) *  2.5f;
-
-			/* Main island body: low edge, grassy raised center. */
-			topY = sea - 2 + (int)(mask * 15.0f) + (int)((large + medium + detail) * (0.25f + mask * 0.70f));
-
-			/* Outside island = real ocean floor, not empty skipped columns. */
-			if (mask < 0.115f) topY = sea - 5;
-
-			/* Smooth sandy coast ring. */
-			if (mask >= 0.115f && mask < 0.28f) {
-				topY = sea - 1 + (int)((mask - 0.115f) * 26.0f);
-			}
-
-			/* Small inland ponds/lagoons, but don't cut giant holes through cliffs. */
-			lake = ExpGen_Fbm((float)x, (float)z, 74.0f, 4701);
-			if (mask > 0.40f && lake < 0.145f && topY < sea + 8) topY = sea - 1;
-
-			/* Classic stepped Indev look. */
-			topY = (topY / 2) * 2;
-
-			if (topY < 2) topY = 2;
-			if (topY > World.MaxY - 3) topY = World.MaxY - 3;
-
-			beachNoise = ExpGen_Fbm((float)x, (float)z, 39.0f, 4801);
-			if (topY <= sea + 1 || mask < 0.25f) {
-				surface = BLOCK_SAND;
-			} else if (beachNoise > 0.90f && mask > 0.45f) {
-				surface = BLOCK_GRAVEL;
-			} else {
-				surface = BLOCK_GRASS;
-			}
-
-			/* Always write every y in every column. This prevents missing chunks/void fog. */
-			ExpGen_BuildWaterColumn(x, z, topY, sea, surface);
-			if (canPlantTrees) heightmap[z * World.Width + x] = (surface == BLOCK_GRASS && topY > sea + 2) ? topY : 0;
+			worldX = baseX + x;
+			worldZ = baseZ + z;
+			CavFXInf_GenColumn(blocks, x, z, worldX, worldZ);
 		}
 		Gen_CurrentProgress = (float)z / World.Length;
 	}
-
-	if (canPlantTrees) {
-		Gen_CurrentState = "Planting island trees";
-		NotchyGen_PlantTrees();
-		Mem_Free(heightmap);
-		heightmap = NULL;
-	}
-
-	gen_done = true;
 }
 
-const struct MapGenerator IslandsGen = {
-	IslandsGen_Prepare,
-	IslandsGen_Generate
-};
+static void CavFXInf_RebuildWorld(void) {
+	if (!World.Loaded || !World.Blocks) return;
+	CavFXInf_GenerateWindow(World.Blocks);
+	MapRenderer_Refresh();
+}
 
-static cc_bool InlandsGen_Prepare(int seed) {
-	Random_Seed(&rnd, seed);
-	waterLevel = World.Height / 2;
-	minHeight  = World.Height;
-	heightmap  = NULL;
+void CavFXInfiniteChunks_Disable(void) {
+	CavFXInfiniteChunks_Active = false;
+	cavfx_inf_loadedOnce = false;
+}
+
+void CavFXInfiniteChunks_Begin(int seed) {
+	cavfx_inf_seed = seed;
+	cavfx_inf_originChunkX = -(CAVFX_INF_WORLD_SIZE / CAVFX_INF_CHUNK_SIZE) / 2;
+	cavfx_inf_originChunkZ = -(CAVFX_INF_WORLD_SIZE / CAVFX_INF_CHUNK_SIZE) / 2;
+	CavFXInfiniteChunks_Active = true;
+	cavfx_inf_loadedOnce = false;
+}
+
+static cc_bool CavFXInf_Prepare(int seed) {
+	CavFXInfiniteChunks_Begin(seed);
 	return true;
 }
 
-static void InlandsGen_BuildColumn(int x, int z, int topY, int sea, BlockRaw surface) {
-	int y, index;
-	BlockRaw block;
-
-	if (topY < 2) topY = 2;
-	if (topY > World.MaxY - 3) topY = World.MaxY - 3;
-
-	for (y = 0; y < World.Height; y++) {
-		index = World_Pack(x, y, z);
-
-		if (y == 0) {
-			block = BLOCK_STONE;
-		} else if (y < topY - 4) {
-			block = BLOCK_STONE;
-		} else if (y < topY) {
-			block = BLOCK_DIRT;
-		} else if (y == topY) {
-			block = surface;
-		} else if (y <= sea) {
-			block = BLOCK_STILL_WATER;
-		} else {
-			block = BLOCK_AIR;
-		}
-
-		Gen_Blocks[index] = block;
-	}
-}
-
-static BlockRaw InlandsGen_Surface(int x, int z, int topY, int sea) {
-	float broad, gravel;
-
-	/* Beaches and lake beds are sandy, like the old Indev screenshots. */
-	if (topY <= sea + 1) return BLOCK_SAND;
-
-	/* Broad, coherent material patches. Keep grass dominant. */
-	broad  = ExpGen_Fbm((float)x, (float)z, 76.0f, 12001);
-	gravel = ExpGen_Fbm((float)x, (float)z, 34.0f, 12077);
-
-	if (broad < 0.17f) return BLOCK_SAND;
-	if (broad > 0.84f || gravel > 0.82f) return BLOCK_GRAVEL;
-	return BLOCK_GRASS;
-}
-
-static void InlandsGen_Generate(void) {
-	int x, z, topY, sea;
-	float large, medium, detail, lake, edge, dx, dz, maxDist;
-	BlockRaw surface;
-	cc_bool canPlantTrees;
-
-	/* Build from scratch. Do not run Notchy first, otherwise custom world types
-	   can leave partially modified maps and mess up later generations. */
-	sea = World.Height / 2;
-	Gen_CurrentState = "Building Indev inland";
-
-	Mem_Free(heightmap);
-	heightmap = (cc_int16*)Mem_TryAlloc(World.Width * World.Length, 2);
-	canPlantTrees = heightmap != NULL;
-
-	for (z = 0; z < World.Length; z++) {
-		for (x = 0; x < World.Width; x++) {
-			large  = (ExpGen_Fbm((float)x, (float)z, 118.0f, 11001) - 0.5f) * 18.0f;
-			medium = (ExpGen_Fbm((float)x, (float)z,  54.0f, 11031) - 0.5f) *  8.0f;
-			detail = (ExpGen_Fbm((float)x, (float)z,  24.0f, 11061) - 0.5f) *  3.0f;
-			topY   = sea + 7 + (int)(large + medium + detail);
-
-			lake = ExpGen_Fbm((float)x, (float)z, 86.0f, 11111);
-			if (lake < 0.18f && topY < sea + 9) topY = sea - 2;
-			else if (lake < 0.24f && topY < sea + 7) topY = sea;
-
-			/* Inland = no ocean border. Lift the rim if valleys reach the edge. */
-			dx = Math_AbsF((float)x - (float)World.Width  * 0.5f) / ((float)World.Width  * 0.5f);
-			dz = Math_AbsF((float)z - (float)World.Length * 0.5f) / ((float)World.Length * 0.5f);
-			maxDist = dx > dz ? dx : dz;
-			if (maxDist > 0.88f && topY < sea + 3) topY = sea + 3 + (int)((maxDist - 0.88f) * 10.0f);
-
-			topY = (topY / 2) * 2;
-			if (topY < 2) topY = 2;
-			if (topY > World.MaxY - 3) topY = World.MaxY - 3;
-
-			surface = InlandsGen_Surface(x, z, topY, sea);
-			InlandsGen_BuildColumn(x, z, topY, sea, surface);
-			if (canPlantTrees) heightmap[z * World.Width + x] = (surface == BLOCK_GRASS && topY > sea + 1) ? topY : 0;
-		}
-		Gen_CurrentProgress = (float)z / World.Length;
-	}
-
-	if (canPlantTrees) {
-		Gen_CurrentState = "Planting inland trees";
-		NotchyGen_PlantTrees();
-		Mem_Free(heightmap);
-		heightmap = NULL;
-	}
-
+static void CavFXInf_Generate(void) {
+	CavFXInf_GenerateWindow(Gen_Blocks);
 	gen_done = true;
 }
-const struct MapGenerator InlandsGen = {
-	InlandsGen_Prepare,
-	InlandsGen_Generate
+
+const struct MapGenerator CavFXInfiniteGen = {
+	CavFXInf_Prepare,
+	CavFXInf_Generate
+};
+
+static void CavFXInf_ShiftPlayer(int dxBlocks, int dzBlocks) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	if (!p) return;
+	p->Base.Position.x -= dxBlocks;
+	p->Base.Position.z -= dzBlocks;
+	p->Spawn.x         -= dxBlocks;
+	p->Spawn.z         -= dzBlocks;
+	p->Base.prev.pos.x -= dxBlocks; p->Base.next.pos.x -= dxBlocks;
+	p->Base.prev.pos.z -= dzBlocks; p->Base.next.pos.z -= dzBlocks;
+}
+
+static void CavFXInf_CheckShift(struct ScheduledTask* task) {
+	struct LocalPlayer* p;
+	int dxChunks = 0, dzChunks = 0;
+	int dxBlocks, dzBlocks;
+	if (!CavFXInfiniteChunks_Active || !World.Loaded || !World.Blocks) return;
+	p = Entities.CurPlayer;
+	if (!p) return;
+
+	if (!cavfx_inf_loadedOnce) {
+		cavfx_inf_loadedOnce = true;
+		Chat_AddRaw("&eInfinite chunk window v1 active: terrain streams by recentring the map.");
+	}
+
+	if (p->Base.Position.x < CAVFX_INF_BORDER) dxChunks = -CAVFX_INF_SHIFT_CHUNKS;
+	if (p->Base.Position.z < CAVFX_INF_BORDER) dzChunks = -CAVFX_INF_SHIFT_CHUNKS;
+	if (p->Base.Position.x > World.Width  - CAVFX_INF_BORDER) dxChunks =  CAVFX_INF_SHIFT_CHUNKS;
+	if (p->Base.Position.z > World.Length - CAVFX_INF_BORDER) dzChunks =  CAVFX_INF_SHIFT_CHUNKS;
+	if (!dxChunks && !dzChunks) return;
+
+	cavfx_inf_originChunkX += dxChunks;
+	cavfx_inf_originChunkZ += dzChunks;
+	dxBlocks = dxChunks * CAVFX_INF_CHUNK_SIZE;
+	dzBlocks = dzChunks * CAVFX_INF_CHUNK_SIZE;
+	CavFXInf_ShiftPlayer(dxBlocks, dzBlocks);
+	CavFXInf_RebuildWorld();
+	Chat_AddRaw("&eInfinite chunks: shifted world window");
+}
+
+static void CavFXInfComp_Init(void) {
+	ScheduledTask_Add(0.35, CavFXInf_CheckShift);
+}
+
+static void CavFXInfComp_OnNewMap(void) {
+	if (!CavFXInfiniteChunks_Active) cavfx_inf_loadedOnce = false;
+}
+
+struct IGameComponent CavFXInfiniteChunks_Component = {
+	CavFXInfComp_Init,  /* Init */
+	NULL,              /* Free */
+	NULL,              /* Reset */
+	CavFXInfComp_OnNewMap, /* OnNewMap */
+	NULL               /* OnNewMapLoaded */
 };
 
 
