@@ -287,6 +287,118 @@ static void ZipFile_Create(const cc_string* path, struct ResourceZipEntry* entri
 }
 
 
+
+/*########################################################################################################################*
+*----------------------------------------------------Bundled preload assets-----------------------------------------------*
+*#########################################################################################################################*/
+/* CavFX nightly builds ship src/preload as preload/ beside the executable.
+   If resources are missing, install from that folder first instead of starting
+   the online downloader/music thread with missing files. This fixes the
+   one-time first-launch crash when the preload installer has not populated
+   audio/ and texpacks/ yet. */
+
+static cc_bool Preload_FileExists(const cc_string* path) {
+	cc_filepath raw_path;
+	Platform_EncodePath(&raw_path, path);
+	return File_Exists(&raw_path);
+}
+
+static cc_result Preload_CopyFile(const cc_string* srcPath, const cc_string* dstPath) {
+	cc_file src;
+	cc_filepath raw_src;
+	cc_uint32 size, read;
+	cc_uint8* data;
+	cc_result res;
+
+	if (Preload_FileExists(dstPath)) return 0;
+
+	Platform_EncodePath(&raw_src, srcPath);
+	res = File_Open(&src, &raw_src);
+	if (ReturnCode_IsNotFound(res)) return res;
+	if (res) { Logger_IOWarn2(res, "opening preload", &raw_src); return res; }
+
+	res = File_Length(src, &size);
+	if (res) { File_Close(src); return res; }
+
+	data = (cc_uint8*)Mem_TryAlloc(size, 1);
+	if (!data) { File_Close(src); return ERR_OUT_OF_MEMORY; }
+
+	res = File_Read(src, data, size, &read);
+	File_Close(src);
+
+	if (!res && read != size) res = ERR_END_OF_STREAM;
+	if (!res) res = Stream_WriteAllTo(dstPath, data, size);
+
+	if (res) {
+		cc_filepath raw_dst;
+		Platform_EncodePath(&raw_dst, dstPath);
+		Logger_IOWarn2(res, "installing preload", &raw_dst);
+	}
+
+	Mem_Free(data);
+	return res;
+}
+
+static cc_bool Preload_TryCopyTo(const char* srcRaw, const char* dstRaw) {
+	cc_string src = String_FromReadonly(srcRaw);
+	cc_string dst = String_FromReadonly(dstRaw);
+	return Preload_CopyFile(&src, &dst) == 0;
+}
+
+static cc_bool Preload_TryCopyToDefaultTexpack(const char* srcRaw) {
+	cc_string src = String_FromReadonly(srcRaw);
+	cc_string dst;
+
+	if (!Game_Version.DefaultTexpack) return false;
+	dst = String_FromReadonly(Game_Version.DefaultTexpack);
+	return Preload_CopyFile(&src, &dst) == 0;
+}
+
+static void Preload_InstallMusicFile(const char* filename) {
+	cc_string src, dst;
+	char srcBuffer[FILENAME_SIZE];
+	char dstBuffer[FILENAME_SIZE];
+
+	String_InitArray(src, srcBuffer);
+	String_InitArray(dst, dstBuffer);
+
+	/* Packaged nightly layout */
+	String_Format1(&src, "preload/audio/%c", filename);
+	String_Format1(&dst, "audio/%c", filename);
+	if (Preload_CopyFile(&src, &dst) == 0) return;
+
+	/* Developer/source-tree layout */
+	src.length = 0; dst.length = 0;
+	String_Format1(&src, "src/preload/audio/%c", filename);
+	String_Format1(&dst, "audio/%c", filename);
+	Preload_CopyFile(&src, &dst);
+}
+
+static void Preload_InstallBundledAssets(void) {
+	static const char* musicFiles[] = {
+		"calm1.ogg", "calm2.ogg", "calm3.ogg",
+		"hal1.ogg",  "hal2.ogg",  "hal3.ogg",  "hal4.ogg"
+	};
+	int i;
+
+	Utils_EnsureDirectory("audio");
+	Utils_EnsureDirectory("texpacks");
+
+	/* Install texture pack first - this is required to avoid setup flow/downloads. */
+	Preload_TryCopyToDefaultTexpack("preload/texpacks/default.zip");
+	Preload_TryCopyToDefaultTexpack("src/preload/texpacks/default.zip");
+
+	/* Install prebuilt sound-effect zip. */
+	Preload_TryCopyTo("preload/audio/default.zip",     "audio/default.zip");
+	Preload_TryCopyTo("src/preload/audio/default.zip", "audio/default.zip");
+
+	/* Install music OGGs used directly by Audio.c. */
+	for (i = 0; i < Array_Elems(musicFiles); i++)
+	{
+		Preload_InstallMusicFile(musicFiles[i]);
+	}
+}
+
 #ifdef CC_BUILD_NOMUSIC
 static int MusicAsset_Download(const char* hash) { return ERR_NOT_SUPPORTED; }
 #else
@@ -1265,6 +1377,9 @@ static void ResetState() {
 void Resources_CheckExistence(void) {
 	int i;
 	ResetState();
+
+	/* First-launch/nightly fix: install bundled preload files before counting missing resources. */
+	Preload_InstallBundledAssets();
 
 	for (i = 0; i < Array_Elems(asset_sets); i++)
 	{

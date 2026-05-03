@@ -24,6 +24,8 @@ struct IGameComponent;
 
 extern const struct MapGenerator FlatgrassGen;
 extern const struct MapGenerator NotchyGen;
+extern const struct MapGenerator IslandsGen;
+extern const struct MapGenerator InlandsGen;
 extern const struct MapGenerator CavFXInfiniteGen;
 
 extern cc_bool CavFXInfiniteChunks_Active;

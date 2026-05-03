@@ -49,3 +49,7 @@ CC_NOINLINE int EnvRenderer_CalcFlags(const cc_string* mode);
 
 CC_END_HEADER
 #endif
+
+/* CavFX infinite chunks: shifts the cloud plane along with the recentered world window. */
+void EnvRenderer_CavFXShiftClouds(int dx, int dz);
+void EnvRenderer_CavFXResetClouds(void);

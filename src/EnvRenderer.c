@@ -143,6 +143,20 @@ void EnvRenderer_UpdateFog(void) {
 *#########################################################################################################################*/
 static GfxResourceID clouds_vb, clouds_tex;
 static int clouds_vertices;
+static int cavfx_clouds_shift_x, cavfx_clouds_shift_z;
+
+void EnvRenderer_CavFXShiftClouds(int dx, int dz) {
+	cavfx_clouds_shift_x += dx;
+	cavfx_clouds_shift_z += dz;
+	Gfx_DeleteVb(&clouds_vb);
+}
+
+void EnvRenderer_CavFXResetClouds(void) {
+	cavfx_clouds_shift_x = 0;
+	cavfx_clouds_shift_z = 0;
+	Gfx_DeleteVb(&clouds_vb);
+}
+
 
 static void DrawCloudsY(int x1, int z1, int x2, int z2, int y, struct VertexTextured* v) {
 	int endX = x2, endZ = z2, startZ = z1, axisSize = EnvRenderer_AxisSize();
@@ -179,8 +193,8 @@ static CC_NOINLINE void BuildClouds(void) {
 	if (!World.Loaded || EnvRenderer_Minimal) return;
 
 	extent = Utils_AdjViewDist(Game_ViewDistance);
-	x1 = -extent; x2 = World.Width  + extent;
-	z1 = -extent; z2 = World.Length + extent;
+	x1 = -extent + cavfx_clouds_shift_x; x2 = World.Width  + extent + cavfx_clouds_shift_x;
+	z1 = -extent + cavfx_clouds_shift_z; z2 = World.Length + extent + cavfx_clouds_shift_z;
 	clouds_vertices = CalcNumVertices(x2 - x1, z2 - z1);
 
 	clouds_vb = Gfx_CreateVb(VERTEX_FORMAT_TEXTURED, clouds_vertices);
