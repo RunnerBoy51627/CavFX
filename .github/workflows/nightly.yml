@@ -90,7 +90,7 @@ jobs:
           name: cavfx-windows-nightly-${{ github.sha }}
           path: cavfx-windows-nightly-*.zip
 
-    publish-nightly-release:
+  publish-nightly-release:
     needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
     permissions:
