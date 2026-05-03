@@ -12,7 +12,6 @@ concurrency:
 jobs:
   build-linux:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -31,12 +30,24 @@ jobs:
         run: |
           make linux NIGHTLY=1 COMMIT_HASH=${GITHUB_SHA::7}
 
-      - name: Package Linux
+      - name: Package Linux (with preload)
         run: |
           rm -rf CavFX-nightly
           mkdir -p CavFX-nightly
+
           cp CavFX CavFX-nightly/CavFX
           chmod +x CavFX-nightly/CavFX
+
+          if [ -d "src/preload" ]; then
+            cp -r src/preload CavFX-nightly/preload
+          else
+            echo "ERROR: src/preload missing"
+            exit 1
+          fi
+
+          echo "=== PACKAGED FILES ==="
+          ls -R CavFX-nightly
+
           tar -zcvf cavfx-linux64-nightly-${GITHUB_SHA::7}.tar.gz CavFX-nightly
 
       - uses: actions/upload-artifact@v4
@@ -46,7 +57,6 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -55,12 +65,24 @@ jobs:
         run: |
           make mingw NIGHTLY=1 COMMIT_HASH=%GITHUB_SHA:~0,7%
 
-      - name: Package Windows
+      - name: Package Windows (with preload)
         shell: pwsh
         run: |
           Remove-Item -Recurse -Force CavFX-nightly -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force CavFX-nightly
+
           Copy-Item CavFX.exe CavFX-nightly/CavFX.exe
+
+          if (Test-Path "src/preload") {
+            Copy-Item src/preload CavFX-nightly/preload -Recurse
+          } else {
+            Write-Error "src/preload missing"
+            exit 1
+          }
+
+          Write-Host "=== PACKAGED FILES ==="
+          Get-ChildItem -Recurse CavFX-nightly
+
           Compress-Archive -Path CavFX-nightly -DestinationPath "cavfx-windows-nightly-$($env:GITHUB_SHA.Substring(0,7)).zip"
 
       - uses: actions/upload-artifact@v4
@@ -75,8 +97,6 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
           path: nightly-artifacts
