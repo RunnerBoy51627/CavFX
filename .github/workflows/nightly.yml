@@ -30,7 +30,7 @@ jobs:
         run: |
           make linux NIGHTLY=1 COMMIT_HASH=${GITHUB_SHA::7}
 
-      - name: Package Linux (with preload)
+      - name: Package Linux (extracted preload)
         run: |
           rm -rf CavFX-nightly
           mkdir -p CavFX-nightly
@@ -39,7 +39,7 @@ jobs:
           chmod +x CavFX-nightly/CavFX
 
           if [ -d "src/preload" ]; then
-            cp -r src/preload CavFX-nightly/preload
+            cp -r src/preload/* CavFX-nightly/
           else
             echo "ERROR: src/preload missing"
             exit 1
@@ -65,7 +65,7 @@ jobs:
         run: |
           make mingw NIGHTLY=1 COMMIT_HASH=%GITHUB_SHA:~0,7%
 
-      - name: Package Windows (with preload)
+      - name: Package Windows (extracted preload)
         shell: pwsh
         run: |
           Remove-Item -Recurse -Force CavFX-nightly -ErrorAction SilentlyContinue
@@ -74,7 +74,7 @@ jobs:
           Copy-Item CavFX.exe CavFX-nightly/CavFX.exe
 
           if (Test-Path "src/preload") {
-            Copy-Item src/preload CavFX-nightly/preload -Recurse
+            Copy-Item src/preload/* CavFX-nightly/ -Recurse
           } else {
             Write-Error "src/preload missing"
             exit 1
