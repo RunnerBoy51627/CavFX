@@ -251,6 +251,10 @@ enum GuiPriority {
 #define GUI_MAX_SCREENS 10
 extern struct Screen* Gui_Screens[GUI_MAX_SCREENS];
 
+/* CavFX main menu logo loaded from texture pack/preload root (cavfx_logo.png). */
+extern GfxResourceID Gui_CavFXLogoTex;
+extern int Gui_CavFXLogoWidth, Gui_CavFXLogoHeight;
+
 /* Calculates position of an element on a particular axis */
 /* For example, to calculate X position of a text widget on screen */
 int Gui_CalcPos(cc_uint8 anchor, int offset, int size, int axisLen);

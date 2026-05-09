@@ -69,6 +69,7 @@ void Menu_LayoutBack(struct ButtonWidget* btn) {
 }
 static void Menu_CloseKeyboard(void* s) { OnscreenKeyboard_Close(); }
 static cc_bool GenLevelScreen_FromMainMenu, LoadLevelScreen_FromMainMenu;
+static void MainMenuScreen_RenderLogo(void);
 
 static void Menu_RenderBounds_Menu(void) {
 	PackedCol topCol = PackedCol_Make(24, 24, 24, 105);
@@ -511,6 +512,7 @@ static void MainMenuScreen_Render(void* screen, float delta) {
 	PackedCol bottomCol = PackedCol_Make(25, 45, 80, 255);
 
 	Gfx_Draw2DGradient(0, 0, Window_UI.Width, Window_UI.Height, topCol, bottomCol);
+	MainMenuScreen_RenderLogo();
 	Screen_Render2Widgets(screen, delta);
 }
 
@@ -531,18 +533,24 @@ static struct MenuInputDesc MainMenu_UsernameInput;
 static cc_string MainMenu_LanDefault = String_FromConst("127.0.0.1:25565");
 static cc_bool MainMenu_AskedUsername;
 
-static void MainMenuScreen_UpdateSplash(struct MainMenuScreen* s) {
+static cc_bool MainMenuSplash_Chosen;
+static char MainMenuSplashBuffer[STRING_SIZE];
+
+static void MainMenuScreen_ChooseSplash(void) {
 	cc_string path = String_FromConst("splashtext.txt");
 	cc_filepath raw_path;
 	struct Stream stream, buffered;
 	cc_uint8 buffer[512];
 	cc_string line, chosen;
-	char lineBuffer[STRING_SIZE], chosenBuffer[STRING_SIZE];
+	char lineBuffer[STRING_SIZE];
 	RNGState rnd;
 	int count = 0;
 	cc_result res;
 
-	String_InitArray(chosen, chosenBuffer);
+	if (MainMenuSplash_Chosen) return;
+	MainMenuSplash_Chosen = true;
+
+	String_InitArray(chosen, MainMenuSplashBuffer);
 	String_AppendConst(&chosen, "Now with CavLAN!");
 
 	Platform_EncodePath(&raw_path, &path);
@@ -568,10 +576,39 @@ static void MainMenuScreen_UpdateSplash(struct MainMenuScreen* s) {
 		}
 		stream.Close(&stream);
 	}
+}
 
-	TextWidget_Set(&s->splash, &chosen, &s->textFont);
-	/* Classic splash text yellow */
+static void MainMenuScreen_UpdateSplash(struct MainMenuScreen* s) {
+	cc_string splash;
+	MainMenuScreen_ChooseSplash();
+	String_InitArray(splash, MainMenuSplashBuffer);
+	TextWidget_Set(&s->splash, &splash, &s->textFont);
 	s->splash.color = PackedCol_Make(255, 255, 85, 255);
+}
+
+static void MainMenuScreen_RenderLogo(void) {
+	struct Texture tex;
+	int width, height, maxWidth;
+
+	if (!Gui_CavFXLogoTex || !Gui_CavFXLogoWidth || !Gui_CavFXLogoHeight) return;
+
+	width  = Gui_CavFXLogoWidth;
+	height = Gui_CavFXLogoHeight;
+	maxWidth = Window_UI.Width - Display_ScaleX(40);
+	if (width > maxWidth) {
+		height = (height * maxWidth) / width;
+		width  = maxWidth;
+	}
+
+	tex.ID = Gui_CavFXLogoTex;
+	tex.x = (Window_UI.Width - width) / 2;
+	tex.y = (Window_UI.Height / 2) - Display_ScaleY(205);
+	tex.width = width; tex.height = height;
+	tex.uv.u1 = 0.0f; tex.uv.v1 = 0.0f;
+	tex.uv.u2 = 1.0f; tex.uv.v2 = 1.0f;
+
+	Gfx_BindTexture(tex.ID);
+	Gfx_Draw2DTexture(&tex, PACKEDCOL_WHITE);
 }
 
 static void MainMenuScreen_UpdateMode(struct MainMenuScreen* s) {
@@ -728,11 +765,12 @@ static void MainMenuScreen_ContextRecreated(void* screen) {
 	Gui_MakeTitleFont(&s->titleFont);
 	Gui_MakeBodyFont(&s->textFont);
 
-	TextWidget_SetConst(&s->title, "CavFX", &s->titleFont);
+	if (Gui_CavFXLogoTex) { TextWidget_SetConst(&s->title, "", &s->titleFont); }
+	else { TextWidget_SetConst(&s->title, "CavFX", &s->titleFont); }
 	MainMenuScreen_UpdateSplash(s);
 	ButtonWidget_SetConst(&s->create, "Create world...", &s->titleFont);
 	ButtonWidget_SetConst(&s->load, "Load world...", &s->titleFont);
-	ButtonWidget_SetConst(&s->join, "Join LAN...", &s->titleFont);
+	ButtonWidget_SetConst(&s->join, "Join CavLAN...", &s->titleFont);
 	MainMenuScreen_UpdateUsername(s);
 	//MainMenuScreen_UpdateMode(s);
 	ButtonWidget_SetConst(&s->quit, "Quit", &s->titleFont);
@@ -741,7 +779,7 @@ static void MainMenuScreen_ContextRecreated(void* screen) {
 static void MainMenuScreen_Layout(void* screen) {
 	struct MainMenuScreen* s = (struct MainMenuScreen*)screen;
 	Widget_SetLocation(&s->title,  ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -150);
-	Widget_SetLocation(&s->splash, ANCHOR_CENTRE, ANCHOR_CENTRE, 80, -118);
+	Widget_SetLocation(&s->splash, ANCHOR_CENTRE, ANCHOR_CENTRE, 95, -122);
 	Widget_SetLocation(&s->create, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -80);
 	Widget_SetLocation(&s->load, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -35);
 	Widget_SetLocation(&s->join, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 10);
@@ -1540,7 +1578,7 @@ static void ClassicPauseScreen_Layout(void* screen) {
 	struct PauseScreen* s = (struct PauseScreen*)screen;
 	Menu_LayoutButtons(s->btns, s->descs, s->descsCount);
 	Widget_SetLocation(&s->back, ANCHOR_CENTRE, ANCHOR_MAX, 0, (Game_ClassicMode || Game_ClassicHacks) ? 80 : 25);
-	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -150);
+	Widget_SetLocation(&s->title,  ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -150);
 }
 
 static void ClassicPauseScreen_Init(void* screen) {
@@ -2229,7 +2267,7 @@ static void ClassicGenScreen_ContextRecreated(void* screen) {
 
 static void ClassicGenScreen_Layout(void* screen) {
 	struct ClassicGenScreen* s = (struct ClassicGenScreen*)screen;
-	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -150);
+	Widget_SetLocation(&s->title,  ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -150);
 	Widget_SetLocation(&s->btns[0], ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -100);
 	Widget_SetLocation(&s->btns[1], ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -50);
 	Widget_SetLocation(&s->btns[2], ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 0);
