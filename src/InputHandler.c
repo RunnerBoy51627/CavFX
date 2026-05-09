@@ -520,7 +520,93 @@ static BlockID InputHandler_GetSurvivalDrop(BlockID old) {
 	}
 }
 
-static float InputHandler_BlockBreakTime(BlockID block) {
+static cc_bool InputHandler_IsPickaxeBlock(BlockID block) {
+	switch (block) {
+	case BLOCK_STONE:
+	case BLOCK_COBBLE:
+	case BLOCK_SANDSTONE:
+	case BLOCK_MOSSY_ROCKS:
+	case BLOCK_STONE_BRICK:
+	case BLOCK_PILLAR:
+	case BLOCK_COAL_ORE:
+	case BLOCK_IRON_ORE:
+	case BLOCK_GOLD_ORE:
+	case BLOCK_GOLD:
+	case BLOCK_IRON:
+	case BLOCK_OBSIDIAN:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static cc_bool InputHandler_IsAxeBlock(BlockID block) {
+	switch (block) {
+	case BLOCK_LOG:
+	case BLOCK_WOOD:
+	case BLOCK_BOOKSHELF:
+	case BLOCK_CRATE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static cc_bool InputHandler_IsShovelBlock(BlockID block) {
+	switch (block) {
+	case BLOCK_GRASS:
+	case BLOCK_DIRT:
+	case BLOCK_SAND:
+	case BLOCK_GRAVEL:
+	case BLOCK_SNOW:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static float InputHandler_ToolSpeedMultiplier(BlockID tool, BlockID block) {
+	/* Lower number = faster breaking time. */
+	switch (tool) {
+	case SURVIVAL_ITEM_WOOD_PICKAXE:
+		return InputHandler_IsPickaxeBlock(block) ? 0.60f : 1.0f;
+	case SURVIVAL_ITEM_STONE_PICKAXE:
+		return InputHandler_IsPickaxeBlock(block) ? 0.45f : 1.0f;
+	case SURVIVAL_ITEM_IRON_PICKAXE:
+		return InputHandler_IsPickaxeBlock(block) ? 0.30f : 1.0f;
+	case SURVIVAL_ITEM_GOLD_PICKAXE:
+		return InputHandler_IsPickaxeBlock(block) ? 0.20f : 1.0f;
+	case SURVIVAL_ITEM_DIAMOND_PICKAXE:
+		return InputHandler_IsPickaxeBlock(block) ? 0.22f : 1.0f;
+
+	case SURVIVAL_ITEM_WOOD_AXE:
+		return InputHandler_IsAxeBlock(block) ? 0.60f : 1.0f;
+	case SURVIVAL_ITEM_STONE_AXE:
+		return InputHandler_IsAxeBlock(block) ? 0.45f : 1.0f;
+	case SURVIVAL_ITEM_IRON_AXE:
+		return InputHandler_IsAxeBlock(block) ? 0.30f : 1.0f;
+	case SURVIVAL_ITEM_GOLD_AXE:
+		return InputHandler_IsAxeBlock(block) ? 0.20f : 1.0f;
+	case SURVIVAL_ITEM_DIAMOND_AXE:
+		return InputHandler_IsAxeBlock(block) ? 0.22f : 1.0f;
+
+	case SURVIVAL_ITEM_WOOD_SHOVEL:
+		return InputHandler_IsShovelBlock(block) ? 0.60f : 1.0f;
+	case SURVIVAL_ITEM_STONE_SHOVEL:
+		return InputHandler_IsShovelBlock(block) ? 0.45f : 1.0f;
+	case SURVIVAL_ITEM_IRON_SHOVEL:
+		return InputHandler_IsShovelBlock(block) ? 0.30f : 1.0f;
+	case SURVIVAL_ITEM_GOLD_SHOVEL:
+		return InputHandler_IsShovelBlock(block) ? 0.20f : 1.0f;
+	case SURVIVAL_ITEM_DIAMOND_SHOVEL:
+		return InputHandler_IsShovelBlock(block) ? 0.22f : 1.0f;
+
+	default:
+		return 1.0f;
+	}
+}
+
+static float InputHandler_BaseBlockBreakTime(BlockID block) {
 	if (Blocks.Draw[block] == DRAW_SPRITE) return 0.20f;
 	switch (block) {
 	case BLOCK_GRASS:
@@ -555,6 +641,18 @@ static float InputHandler_BlockBreakTime(BlockID block) {
 	default:
 		return 0.85f;
 	}
+}
+
+static float InputHandler_BlockBreakTime(BlockID block) {
+	float time = InputHandler_BaseBlockBreakTime(block);
+	BlockID held = Inventory_SelectedBlock;
+
+	if (Game_SurvivalMode && SurvivalItem_IsTool(held)) {
+		time *= InputHandler_ToolSpeedMultiplier(held, block);
+	}
+
+	/* Don't let gold/diamond tools instantly delete blocks too fast for the progress bar. */
+	return max(time, 0.08f);
 }
 
 float InputHandler_GetMiningProgress(void) {
@@ -628,9 +726,77 @@ static void InputHandler_DeleteBlock(void) {
 	InputHandler_DeleteBlockNow(pos, old);
 }
 
+
+static float survival_eatTimer;
+static BlockID survival_eatingItem;
+
+static cc_bool InputHandler_TryEatHeldFood(float delta) {
+	BlockID held;
+	int heal;
+
+	if (!Game_SurvivalMode) return false;
+
+	held = Inventory_SelectedBlock;
+	if (!SurvivalItem_IsFood(held)) {
+		survival_eatTimer = 0.0f;
+		survival_eatingItem = BLOCK_AIR;
+		HeldBlockRenderer_StopEating();
+		return false;
+	}
+
+	/* Don't eat at full health. */
+	if (Entities.CurPlayer->Health >= 20) {
+		survival_eatTimer = 0.0f;
+		survival_eatingItem = BLOCK_AIR;
+		HeldBlockRenderer_StopEating();
+		return true;
+	}
+
+	if (survival_eatingItem != held) {
+		survival_eatingItem = held;
+		survival_eatTimer = 0.0f;
+		HeldBlockRenderer_StartEating();
+	}
+
+	survival_eatTimer += delta;
+	HeldBlockRenderer_StartEating();
+
+	if (survival_eatTimer < 1.25f) return true;
+
+	heal = SurvivalItem_FoodHeal(held);
+	if (heal > 0) {
+		Entities.CurPlayer->Health += heal;
+		if (Entities.CurPlayer->Health > 20) Entities.CurPlayer->Health = 20;
+		Inventory_ConsumeSelected();
+	}
+
+	survival_eatTimer = 0.0f;
+	survival_eatingItem = BLOCK_AIR;
+	HeldBlockRenderer_StopEating();
+	return true;
+}
+
+
+
+static cc_bool InputHandler_UseSelectedBlock(void) {
+	IVec3 pos;
+	BlockID old;
+	pos = Game_SelectedPos.pos;
+	if (!Game_SelectedPos.valid || !World_Contains(pos.x, pos.y, pos.z)) return false;
+
+	old = World_GetBlock(pos.x, pos.y, pos.z);
+	if (old == BLOCK_CRAFTING_TABLE) {
+		CraftingTableScreen_Show();
+		return true;
+	}
+	return false;
+}
+
 static void InputHandler_PlaceBlock(void) {
 	IVec3 pos;
 	BlockID old, block;
+	if (InputHandler_UseSelectedBlock()) return;
+
 	pos = Game_SelectedPos.translatedPos;
 	if (!Game_SelectedPos.valid || !World_Contains(pos.x, pos.y, pos.z)) return;
 
@@ -706,6 +872,11 @@ void InputHandler_Tick(float delta) {
 	left   = input_buttonsDown[MOUSE_LEFT];
 	middle = input_buttonsDown[MOUSE_MIDDLE];
 	right  = input_buttonsDown[MOUSE_RIGHT];
+	if (!right) {
+		survival_eatTimer = 0.0f;
+		survival_eatingItem = BLOCK_AIR;
+		HeldBlockRenderer_StopEating();
+	}
 	
 #ifdef CC_BUILD_TOUCH
 	if (Input_TouchMode) {
@@ -726,7 +897,7 @@ void InputHandler_Tick(float delta) {
 		InputHandler_DeleteBlock();
 	} else if (right) {
 		InputHandler_ClearMining();
-		InputHandler_PlaceBlock();
+		if (!InputHandler_TryEatHeldFood(0.25f)) InputHandler_PlaceBlock();
 	} else if (middle) {
 		InputHandler_ClearMining();
 		InputHandler_PickBlock();

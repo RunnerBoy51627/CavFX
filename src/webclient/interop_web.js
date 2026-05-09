@@ -1054,6 +1054,80 @@ mergeInto(LibraryManager.library, {
     var str = AUDIO.errors[errCode - 1];
     return stringToUTF8(str, buffer, bufferLen);
   },
+  interop_WebMusicStart: function(volume) {
+    try {
+      window.AUDIO = window.AUDIO || { context: null, sources: [], buffers: {}, errors: [], seen: {} };
+      if (!AUDIO.music) {
+        AUDIO.music = { audio: null, urls: {}, index: -1, list: [
+          '/audio/calm1.ogg', '/audio/calm2.ogg', '/audio/calm3.ogg',
+          '/audio/hal1.ogg',  '/audio/hal2.ogg',  '/audio/hal3.ogg', '/audio/hal4.ogg'
+        ]};
+      }
+
+      if (AUDIO.context && AUDIO.context.state === 'suspended') {
+        AUDIO.context.resume();
+      }
+
+      var music = AUDIO.music;
+      if (!music.audio) {
+        music.audio = new Audio();
+        music.audio.preload = 'auto';
+        music.audio.loop = false;
+        music.audio.addEventListener('ended', function() {
+          _interop_WebMusicNext();
+        });
+      }
+
+      music.audio.volume = Math.max(0, Math.min(1, volume / 100.0));
+      if (!music.audio.src) _interop_WebMusicNext();
+      music.audio.play().catch(function(err) {
+        console.log('Web music play blocked until user gesture:', err);
+      });
+      return 0;
+    } catch (err) {
+      return _interop_AudioLog(err);
+    }
+  },
+  interop_WebMusicStart__deps: ['interop_AudioLog', 'interop_WebMusicNext'],
+
+  interop_WebMusicNext: function() {
+    var music = AUDIO.music;
+    if (!music || !music.audio || !music.list.length) return;
+
+    music.index = (music.index + 1 + ((Math.random() * (music.list.length - 1)) | 0)) % music.list.length;
+    var path = music.list[music.index];
+
+    try {
+      if (!music.urls[path]) {
+        var data = CCFS.readFile(path);
+        var blob = new Blob([data], { type: 'audio/ogg' });
+        music.urls[path] = URL.createObjectURL(blob);
+      }
+      music.audio.src = music.urls[path];
+      music.audio.play().catch(function(err) {
+        console.log('Web music play blocked until user gesture:', err);
+      });
+    } catch (err) {
+      console.log('Unable to play web music ' + path + ':', err);
+    }
+  },
+
+  interop_WebMusicStop: function() {
+    try {
+      if (AUDIO && AUDIO.music && AUDIO.music.audio) {
+        AUDIO.music.audio.pause();
+      }
+    } catch (err) { }
+  },
+
+  interop_WebMusicSetVolume: function(volume) {
+    try {
+      if (AUDIO && AUDIO.music && AUDIO.music.audio) {
+        AUDIO.music.audio.volume = Math.max(0, Math.min(1, volume / 100.0));
+      }
+    } catch (err) { }
+  },
+
   
   
 //########################################################################################################################

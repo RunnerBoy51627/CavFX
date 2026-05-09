@@ -130,6 +130,12 @@
     <Filter Include="Source Files\BearSSL">
       <UniqueIdentifier>{dec80279-6e40-46a8-b024-ee04e8931638}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\Mods">
+      <UniqueIdentifier>{3d7aae9d-addf-41da-8820-8ab150eecb30}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Mods">
+      <UniqueIdentifier>{e1024b22-728a-476f-8bb1-1a445e51c78f}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Platform.h">
@@ -368,6 +374,9 @@
     </ClInclude>
     <ClInclude Include="Updater.h">
       <Filter>Header Files\Game</Filter>
+    </ClInclude>
+    <ClInclude Include="ForgedMenuBridge.h">
+      <Filter>Header Files\Mods</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -1000,6 +1009,12 @@
     </ClCompile>
     <ClCompile Include="Updater.c">
       <Filter>Source Files\Game</Filter>
+    </ClCompile>
+    <ClCompile Include="ForgedMenuBridge.c">
+      <Filter>Source Files\Mods</Filter>
+    </ClCompile>
+    <ClCompile Include="DisableFix.c">
+      <Filter>Source Files\Mods</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

@@ -27,6 +27,8 @@
 #include "Protocol.h"
 #include "Server.h"
 #include "HeldBlockRenderer.h"
+#include "Particle.h"
+#include "SurvivalItems.h"
 #include "Audio.h"
 
 const char* const NameMode_Names[NAME_MODE_COUNT]   = { "None", "Hovered", "All", "AllHovered", "AllUnscaled" };
@@ -573,7 +575,49 @@ static void DroppedItem_SetLocation(struct Entity* e, struct LocationUpdate* upd
 }
 
 static void DroppedItem_RenderModel(struct Entity* e, float delta, float t) {
-	Model_Render(e->Model, e);
+	struct DroppedItem* item = (struct DroppedItem*)e;
+	struct VertexTextured* vertices;
+	TextureRec rec;
+	TextureLoc loc;
+	Vec2 size;
+	Vec3 pos;
+	int col, row;
+
+	if (!SurvivalItem_IsItem(item->Block)) {
+		Model_Render(e->Model, e);
+		return;
+	}
+
+	if (!Gui.ItemsTex) return;
+
+	loc = SurvivalItem_TextureLoc(item->Block);
+	col = ((int)loc) & 15;
+	row = ((int)loc) >> 4;
+
+	rec.u1 = col / 16.0f;
+	rec.v1 = row / 16.0f;
+	rec.u2 = (col + 1) / 16.0f;
+	rec.v2 = (row + 1) / 16.0f;
+
+	size.x = 0.45f;
+	size.y = 0.45f;
+	pos    = e->Position;
+	pos.y += 0.10f;
+
+	if (!e->ModelVB) e->ModelVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, 4);
+
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	Gfx_BindTexture(Gui.ItemsTex);
+
+	vertices = (struct VertexTextured*)Gfx_LockDynamicVb(e->ModelVB, VERTEX_FORMAT_TEXTURED, 4);
+	Particle_DoRender(&size, &pos, &rec, PACKEDCOL_WHITE, vertices);
+	Gfx_UnlockDynamicVb(e->ModelVB);
+
+	Gfx_SetAlphaTest(true);
+	Gfx_SetAlphaBlending(true);
+	Gfx_DrawVb_IndexedTris(4);
+	Gfx_SetAlphaBlending(false);
+	Gfx_SetAlphaTest(false);
 }
 
 static cc_bool DroppedItem_ShouldRenderName(struct Entity* e) { return false; }
@@ -688,7 +732,13 @@ cc_bool DroppedItem_RemoveNearest(BlockID block, Vec3 pos) {
 *#########################################################################################################################*/
 #define MOB_YAW_OFFSET          90.0f
 #define MOB_SPAWN_INTERVAL      10.0f
-#define MOB_MAX_ALIVE           10
+#define MOB_MAX_ALIVE           14
+#define MOB_MAX_HOSTILE         8
+#define MOB_MAX_PASSIVE         6
+
+/* Survival day/night cycle. One full cycle is 4 minutes for testing.
+ * 0.0 = sunrise, 0.25 = noon, 0.50 = sunset, 0.75 = midnight. */
+#define SURVIVAL_DAY_LENGTH     240.0f
 #define MOB_DESPAWN_RANGE       96.0f
 #define MOB_CHASE_RANGE         24.0f
 #define MOB_ATTACK_COOLDOWN     1.0f
@@ -696,12 +746,20 @@ cc_bool DroppedItem_RemoveNearest(BlockID block, Vec3 pos) {
 #define MOB_TURN_SPEED          0.14f
 #define MOB_CLOSE_STOP_SCALE    0.90f
 #define MOB_STUCK_JUMP_TIME     0.25f
-#define MOB_JUMP_COOLDOWN       0.35f
+#define MOB_JUMP_COOLDOWN       0.65f
+#define MOB_LEDGE_JUMP_VEL      0.34f
+#define MOB_SPIDER_JUMP_VEL     0.42f
+#define MOB_KNOCKBACK_TIME      0.28f
+#define MOB_KNOCKBACK_FRICTION  0.88f
+#define MOB_BURN_INTERVAL       1.0f
+#define MOB_BURN_DAMAGE         1
 
 #define MOB_KIND_ZOMBIE         0
 #define MOB_KIND_SKELETON       1
 #define MOB_KIND_CREEPER        2
 #define MOB_KIND_SPIDER         3
+#define MOB_KIND_PIG            4
+#define MOB_KIND_SHEEP          5
 
 struct Mob {
 	struct Entity Base;
@@ -716,12 +774,16 @@ struct Mob {
 	float WanderCooldown;
 	float StuckTimer;
 	float JumpCooldown;
+	float KnockbackTimer;
+	float BurnTimer;
 	Vec3 WanderDir;
 };
 static struct Mob Mobs[MAX_MOBS];
 static RNGState mob_rnd;
 static cc_bool mob_rndSeeded;
 static float mob_spawnTimer;
+static float survival_dayTime = 0.0f;
+static float survival_envTimer;
 
 static void LocalPlayer_Damage(struct LocalPlayer* p, int damage);
 static void Mob_Tick(struct Entity* e, float delta);
@@ -775,6 +837,58 @@ static void Mob_FaceDirection(struct Entity* e, const Vec3* dir) {
 	e->Pitch = 0.0f;
 }
 
+static cc_bool Mob_IsHostileKind(int kind) {
+	return kind == MOB_KIND_ZOMBIE || kind == MOB_KIND_SKELETON || kind == MOB_KIND_CREEPER || kind == MOB_KIND_SPIDER;
+}
+
+static cc_bool Mob_IsPassiveKind(int kind) {
+	return kind == MOB_KIND_PIG || kind == MOB_KIND_SHEEP;
+}
+
+static cc_bool Survival_IsNight(void) {
+	/* Night begins after sunset and ends at sunrise. */
+	return survival_dayTime >= 0.50f;
+}
+
+static void SurvivalDayNight_Tick(float delta) {
+	float nightBlend;
+	PackedCol skyDay, fogDay, cloudsDay, sunDay;
+	PackedCol skyNight, fogNight, cloudsNight, sunNight;
+
+	if (!Game_SurvivalMode || !World.Loaded) return;
+
+	survival_dayTime += delta / SURVIVAL_DAY_LENGTH;
+	while (survival_dayTime >= 1.0f) survival_dayTime -= 1.0f;
+
+	/* Only update environment 4 times per second to avoid spamming EnvVarChanged events. */
+	survival_envTimer += delta;
+	if (survival_envTimer < 0.25f) return;
+	survival_envTimer = 0.0f;
+
+	/* Smooth darkness curve: 0 at day, 1 at midnight. */
+	if (survival_dayTime < 0.50f) nightBlend = 0.0f;
+	else {
+		nightBlend = (survival_dayTime - 0.50f) / 0.50f;
+		if (nightBlend > 0.5f) nightBlend = 1.0f - nightBlend;
+		nightBlend *= 2.0f;
+	}
+
+	skyDay     = PackedCol_Make(0x99, 0xCC, 0xFF, 0xFF);
+	fogDay     = PackedCol_Make(0xFF, 0xFF, 0xFF, 0xFF);
+	cloudsDay  = PackedCol_Make(0xFF, 0xFF, 0xFF, 0xFF);
+	sunDay     = PackedCol_Make(0xFF, 0xFF, 0xFF, 0xFF);
+
+	skyNight    = PackedCol_Make(0x10, 0x18, 0x30, 0xFF);
+	fogNight    = PackedCol_Make(0x18, 0x18, 0x24, 0xFF);
+	cloudsNight = PackedCol_Make(0x45, 0x45, 0x55, 0xFF);
+	sunNight    = PackedCol_Make(0x55, 0x60, 0x80, 0xFF);
+
+	Env_SetSkyCol(PackedCol_Lerp(skyDay,    skyNight,    nightBlend));
+	Env_SetFogCol(PackedCol_Lerp(fogDay,    fogNight,    nightBlend));
+	Env_SetCloudsCol(PackedCol_Lerp(cloudsDay, cloudsNight, nightBlend));
+	Env_SetSunCol(PackedCol_Lerp(sunDay,    sunNight,    nightBlend));
+}
+
 static void Mob_MoveTowards(struct Mob* mob, const Vec3* dir, float speed) {
 	struct Entity* e = &mob->Base;
 	Vec3 move = *dir;
@@ -794,6 +908,76 @@ static void Mob_MoveTowards(struct Mob* mob, const Vec3* dir, float speed) {
 	e->Velocity.x = move.x * speed;
 	e->Velocity.z = move.z * speed;
 	Mob_FaceDirection(e, &move);
+}
+
+
+static cc_bool Mob_ShouldBurnInSun(struct Mob* mob) {
+	struct Entity* e = &mob->Base;
+	IVec3 eye;
+
+	/* Minecraft-style rule: only undead mobs burn, and only in direct sun. */
+	if (mob->Kind != MOB_KIND_ZOMBIE && mob->Kind != MOB_KIND_SKELETON) return false;
+	if (Survival_IsNight()) return false;
+	if (Env.Weather != WEATHER_SUNNY) return false;
+	if (Entity_TouchesAnyWater(e)) return false;
+
+	/* Check the mob eye/head block. Lighting.IsLit means there is sky light here,
+	 * so caves, shade, and covered mobs are safe. */
+	IVec3_Floor(&eye, &e->Position);
+	eye.y += (int)Entity_GetEyeHeight(e);
+	return Lighting.IsLit(eye.x, eye.y, eye.z);
+}
+
+static void Mob_DropDeathLoot(struct Mob* mob) {
+	Vec3 pos, vel;
+	int i, count;
+
+	pos = mob->Base.Position;
+	pos.y += 0.35f;
+
+	if (mob->Kind == MOB_KIND_PIG) {
+		Mob_SeedRandom();
+		count = 1 + (int)(Random_Float(&mob_rnd) * 3.0f);
+		if (count > 3) count = 3;
+
+		for (i = 0; i < count; i++) {
+			vel.x = (Random_Float(&mob_rnd) - 0.5f) * 0.18f;
+			vel.y = 0.12f + Random_Float(&mob_rnd) * 0.10f;
+			vel.z = (Random_Float(&mob_rnd) - 0.5f) * 0.18f;
+			DroppedItem_SpawnAtVelocity(SURVIVAL_ITEM_RAW_PORKCHOP, pos, vel);
+		}
+	}
+}
+
+static void Mob_Damage(struct Mob* mob, int damage) {
+	if (damage <= 0) damage = 1;
+	mob->Health -= damage;
+	if (mob->Health <= 0) {
+		Mob_DropDeathLoot(mob);
+		Entities_Remove(mob->EntityID);
+	}
+}
+
+static void Mob_ApplyKnockback(struct Mob* mob, const Vec3* from, float strength, float lift) {
+	Vec3 knock;
+	float lenSq, len;
+
+	Vec3_Sub(&knock, &mob->Base.Position, from);
+	knock.y = 0.0f;
+	lenSq = Vec3_LengthSquared(&knock);
+	if (lenSq <= 0.0001f) {
+		knock.x = Math_SinF(mob->Base.Yaw * MATH_DEG2RAD);
+		knock.z = Math_CosF(mob->Base.Yaw * MATH_DEG2RAD);
+		lenSq = Vec3_LengthSquared(&knock);
+	}
+	if (lenSq <= 0.0001f) return;
+
+	len = Math_SqrtF(lenSq);
+	mob->Base.Velocity.x = (knock.x / len) * strength;
+	mob->Base.Velocity.z = (knock.z / len) * strength;
+	if (mob->Base.Velocity.y < lift) mob->Base.Velocity.y = lift;
+	mob->KnockbackTimer = MOB_KNOCKBACK_TIME;
+	mob->StuckTimer = 0.0f;
 }
 
 static void Mob_Wander(struct Mob* mob, float delta) {
@@ -823,6 +1007,18 @@ static void Mob_Tick(struct Entity* e, float delta) {
 	oldPos = e->Position;
 	if (mob->AttackCooldown > 0.0f) mob->AttackCooldown -= delta;
 	if (mob->JumpCooldown > 0.0f) mob->JumpCooldown -= delta;
+	if (mob->KnockbackTimer > 0.0f) mob->KnockbackTimer -= delta;
+
+	if (Mob_ShouldBurnInSun(mob)) {
+		mob->BurnTimer += delta;
+		if (mob->BurnTimer >= MOB_BURN_INTERVAL) {
+			mob->BurnTimer = 0.0f;
+			Mob_Damage(mob, MOB_BURN_DAMAGE);
+			if (e->VTABLE == NULL || Entities.List[mob->EntityID] != e) return;
+		}
+	} else {
+		mob->BurnTimer = 0.0f;
+	}
 
 	Vec3_Sub(&diff, &player->Base.Position, &e->Position);
 	distSq = Vec3_LengthSquared(&diff);
@@ -832,7 +1028,13 @@ static void Mob_Tick(struct Entity* e, float delta) {
 		return;
 	}
 
-	if (distSq <= MOB_CHASE_RANGE * MOB_CHASE_RANGE) {
+	if (mob->KnockbackTimer > 0.0f) {
+		/* Do not let AI overwrite knockback immediately after the player hits a mob. */
+		e->Velocity.x *= MOB_KNOCKBACK_FRICTION;
+		e->Velocity.z *= MOB_KNOCKBACK_FRICTION;
+	} else if (Mob_IsPassiveKind(mob->Kind)) {
+		Mob_Wander(mob, delta);
+	} else if (distSq <= MOB_CHASE_RANGE * MOB_CHASE_RANGE) {
 		attackRange = mob->AttackRange;
 		chase = diff;
 		chase.y = 0.0f;
@@ -885,7 +1087,7 @@ static void Mob_Tick(struct Entity* e, float delta) {
 
 	/* Jump up one-block ledges instead of freezing at block edges. */
 	if ((hitWall || mob->StuckTimer >= MOB_STUCK_JUMP_TIME) && e->OnGround && mob->JumpCooldown <= 0.0f) {
-		e->Velocity.y = mob->Kind == MOB_KIND_SPIDER ? 0.50f : 0.42f;
+		e->Velocity.y = mob->Kind == MOB_KIND_SPIDER ? MOB_SPIDER_JUMP_VEL : MOB_LEDGE_JUMP_VEL;
 		mob->JumpCooldown = MOB_JUMP_COOLDOWN;
 		mob->StuckTimer = 0.0f;
 		e->OnGround = false;
@@ -907,7 +1109,7 @@ static void Mob_Tick(struct Entity* e, float delta) {
 	}
 
 	attackRange = mob->AttackRange;
-	if (distSq <= attackRange * attackRange && mob->AttackCooldown <= 0.0f) {
+	if (Mob_IsHostileKind(mob->Kind) && distSq <= attackRange * attackRange && mob->AttackCooldown <= 0.0f) {
 		mob->AttackCooldown = MOB_ATTACK_COOLDOWN;
 		LocalPlayer_Damage(player, mob->Damage);
 	}
@@ -917,6 +1119,16 @@ static int Mob_CountAlive(void) {
 	int i, count = 0;
 	for (i = 0; i < MAX_MOBS; i++) {
 		if (Mobs[i].EntityID >= MOBS_FIRST && Entities.List[Mobs[i].EntityID] == &Mobs[i].Base) count++;
+	}
+	return count;
+}
+
+static int Mob_CountKindGroup(cc_bool hostile) {
+	int i, count = 0;
+	for (i = 0; i < MAX_MOBS; i++) {
+		if (Mobs[i].EntityID < MOBS_FIRST || Entities.List[Mobs[i].EntityID] != &Mobs[i].Base) continue;
+		if (hostile && Mob_IsHostileKind(Mobs[i].Kind)) count++;
+		if (!hostile && Mob_IsPassiveKind(Mobs[i].Kind)) count++;
 	}
 	return count;
 }
@@ -966,6 +1178,18 @@ static cc_bool Mob_SpawnCore(Vec3 pos, int kind) {
 			mob->Health = 16;
 			mob->Speed = 0.085f;
 			mob->AttackRange = 1.30f;
+		} else if (kind == MOB_KIND_PIG) {
+			model = String_FromReadonly("pig");
+			mob->Health = 10;
+			mob->Damage = 0;
+			mob->Speed = 0.040f;
+			mob->AttackRange = 0.0f;
+		} else if (kind == MOB_KIND_SHEEP) {
+			model = String_FromReadonly("sheep");
+			mob->Health = 8;
+			mob->Damage = 0;
+			mob->Speed = 0.038f;
+			mob->AttackRange = 0.0f;
 		} else {
 			model = String_FromReadonly("zombie");
 		}
@@ -996,6 +1220,8 @@ cc_bool Mob_SpawnZombie(Vec3 pos)   { return Mob_SpawnCore(pos, MOB_KIND_ZOMBIE)
 cc_bool Mob_SpawnSkeleton(Vec3 pos) { return Mob_SpawnCore(pos, MOB_KIND_SKELETON); }
 cc_bool Mob_SpawnCreeper(Vec3 pos)  { return Mob_SpawnCore(pos, MOB_KIND_CREEPER); }
 cc_bool Mob_SpawnSpider(Vec3 pos)   { return Mob_SpawnCore(pos, MOB_KIND_SPIDER); }
+cc_bool Mob_SpawnPig(Vec3 pos)      { return Mob_SpawnCore(pos, MOB_KIND_PIG); }
+cc_bool Mob_SpawnSheep(Vec3 pos)    { return Mob_SpawnCore(pos, MOB_KIND_SHEEP); }
 
 
 /* Called by Server.c when a LAN client receives a host-authoritative mob snapshot. */
@@ -1047,6 +1273,18 @@ void Mob_SetSyncedState(EntityID id, cc_uint8 kind, Vec3 pos, Vec3 vel, float ya
 			mob->Health = 16;
 			mob->Speed = 0.085f;
 			mob->AttackRange = 1.30f;
+		} else if (kind == MOB_KIND_PIG) {
+			model = String_FromReadonly("pig");
+			mob->Health = 10;
+			mob->Damage = 0;
+			mob->Speed = 0.040f;
+			mob->AttackRange = 0.0f;
+		} else if (kind == MOB_KIND_SHEEP) {
+			model = String_FromReadonly("sheep");
+			mob->Health = 8;
+			mob->Damage = 0;
+			mob->Speed = 0.038f;
+			mob->AttackRange = 0.0f;
 		} else {
 			model = String_FromReadonly("zombie");
 		}
@@ -1117,20 +1355,11 @@ cc_bool Mob_AttackClosest(float reach, int damage) {
 
 	{
 		struct Mob* mob = (struct Mob*)Entities.List[best];
-		Vec3 knock;
-		float lenSq, len;
 
-		mob->Health -= damage <= 0 ? 1 : damage;
-		Vec3_Sub(&knock, &mob->Base.Position, &p->Base.Position);
-		knock.y = 0.0f;
-		lenSq = Vec3_LengthSquared(&knock);
-		if (lenSq > 0.0001f) {
-			len = Math_SqrtF(lenSq);
-			mob->Base.Velocity.x += (knock.x / len) * 0.18f;
-			mob->Base.Velocity.z += (knock.z / len) * 0.18f;
-			mob->Base.Velocity.y += 0.10f;
+		Mob_Damage(mob, damage);
+		if (Entities.List[best] == &mob->Base) {
+			Mob_ApplyKnockback(mob, &p->Base.Position, 0.36f, 0.18f);
 		}
-		if (mob->Health <= 0) Entities_Remove(best);
 	}
 	return true;
 }
@@ -1145,6 +1374,9 @@ static void Mob_TryAutoSpawn(float delta) {
 	Vec3 pos;
 	float angle, radius;
 	int kind;
+	cc_bool night;
+
+	SurvivalDayNight_Tick(delta);
 
 	if (!Game_SurvivalMode || !World.Loaded || !player) {
 		mob_spawnTimer = 0.0f;
@@ -1157,6 +1389,10 @@ static void Mob_TryAutoSpawn(float delta) {
 	if (mob_spawnTimer < MOB_SPAWN_INTERVAL) return;
 	mob_spawnTimer = 0.0f;
 
+	night = Survival_IsNight();
+	if (night && Mob_CountKindGroup(true) >= MOB_MAX_HOSTILE) return;
+	if (!night && Mob_CountKindGroup(false) >= MOB_MAX_PASSIVE) return;
+
 	angle  = Random_Float(&mob_rnd) * (float)(MATH_PI * 2.0);
 	radius = 12.0f + Random_Float(&mob_rnd) * 10.0f;
 	pos = player->Base.Position;
@@ -1164,11 +1400,17 @@ static void Mob_TryAutoSpawn(float delta) {
 	pos.z += Math_SinF(angle) * radius;
 	pos.y += 1.0f;
 
-	kind = (int)(Random_Float(&mob_rnd) * 4.0f);
-	if (kind == MOB_KIND_SKELETON) Mob_SpawnSkeleton(pos);
-	else if (kind == MOB_KIND_CREEPER) Mob_SpawnCreeper(pos);
-	else if (kind == MOB_KIND_SPIDER) Mob_SpawnSpider(pos);
-	else Mob_SpawnZombie(pos);
+	if (night) {
+		kind = (int)(Random_Float(&mob_rnd) * 4.0f);
+		if (kind == MOB_KIND_SKELETON) Mob_SpawnSkeleton(pos);
+		else if (kind == MOB_KIND_CREEPER) Mob_SpawnCreeper(pos);
+		else if (kind == MOB_KIND_SPIDER) Mob_SpawnSpider(pos);
+		else Mob_SpawnZombie(pos);
+	} else {
+		kind = (int)(Random_Float(&mob_rnd) * 2.0f);
+		if (kind == 0) Mob_SpawnPig(pos);
+		else Mob_SpawnSheep(pos);
+	}
 }
 
 static cc_bool Entities_Tick(struct ScheduledTask2* task) {

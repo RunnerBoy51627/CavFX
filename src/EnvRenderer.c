@@ -233,6 +233,131 @@ void EnvRenderer_RenderClouds(void) {
 static GfxResourceID sky_vb;
 static int sky_vertices;
 
+
+/* CavFX survival daylight visuals
+   Clear phase map:
+   0.00 sunrise, 0.25 noon, 0.50 sunset, 0.75 midnight. */
+#define CAVFX_DAY_LENGTH_SECONDS 1200.0 /* 20 minutes */
+static double cavfx_day_start_time;
+static PackedCol cavfx_last_sky_col, cavfx_last_clouds_col;
+static float cavfx_last_skyR = -1.0f, cavfx_last_skyG = -1.0f, cavfx_last_skyB = -1.0f;
+static float cavfx_last_cloudLight = -1.0f;
+
+static float CavFX_AbsF(float v) { return v < 0.0f ? -v : v; }
+static float CavFX_Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+static float CavFX_Lerp(float a, float b, float t) { return a + (b - a) * CavFX_Clamp01(t); }
+static float CavFX_SmoothStep(float edge0, float edge1, float x) {
+	float t = CavFX_Clamp01((x - edge0) / (edge1 - edge0));
+	return t * t * (3.0f - 2.0f * t);
+}
+static cc_uint8 CavFX_ToByte(float v) {
+	v = CavFX_Clamp01(v);
+	return (cc_uint8)(v * 255.0f + 0.5f);
+}
+static cc_bool CavFX_ColorChangedEnough(float r, float g, float b) {
+	if (cavfx_last_skyR < 0.0f) return true;
+	return CavFX_AbsF(r - cavfx_last_skyR) > 0.012f ||
+	       CavFX_AbsF(g - cavfx_last_skyG) > 0.012f ||
+	       CavFX_AbsF(b - cavfx_last_skyB) > 0.012f;
+}
+static float CavFX_DayPhase(void) {
+	double elapsed = Game.Time - cavfx_day_start_time;
+	float cycle;
+	if (elapsed < 0.0) elapsed = 0.0;
+	cycle = (float)(elapsed / CAVFX_DAY_LENGTH_SECONDS);
+	return cycle - (int)cycle;
+}
+
+static void CavFX_UpdateDaylightColors(void) {
+	float p = CavFX_DayPhase();
+	float sunrise, morning, noon, afternoon, sunset, night, midnight, wrapSunrise;
+	float light, skyR, skyG, skyB, fogR, fogG, fogB, sun, shadow;
+	PackedCol sky, clouds;
+
+	/* Explicit CavFX phases:
+	   0.00 sunrise, 0.25 noon, 0.50 sunset, 0.62 night, 0.75 midnight. */
+	sunrise      = 1.0f - CavFX_SmoothStep(0.00f, 0.13f, p);
+	wrapSunrise  = CavFX_SmoothStep(0.92f, 1.00f, p);
+	sunrise      = max(sunrise, wrapSunrise);
+	morning      = CavFX_SmoothStep(0.06f, 0.18f, p) * (1.0f - CavFX_SmoothStep(0.18f, 0.30f, p));
+	noon         = CavFX_SmoothStep(0.16f, 0.25f, p) * (1.0f - CavFX_SmoothStep(0.30f, 0.40f, p));
+	afternoon    = CavFX_SmoothStep(0.32f, 0.42f, p) * (1.0f - CavFX_SmoothStep(0.42f, 0.50f, p));
+	sunset       = CavFX_SmoothStep(0.44f, 0.52f, p) * (1.0f - CavFX_SmoothStep(0.55f, 0.66f, p));
+	night        = CavFX_SmoothStep(0.58f, 0.68f, p) * (1.0f - CavFX_SmoothStep(0.82f, 0.94f, p));
+	midnight     = CavFX_SmoothStep(0.68f, 0.76f, p) * (1.0f - CavFX_SmoothStep(0.84f, 0.96f, p));
+
+	/* Terrain brightness follows the phase, so golden hour is not dark/orange cursed. */
+	light = 0.18f;
+	light = max(light, sunrise * 0.70f);
+	light = max(light, morning * 0.88f);
+	light = max(light, noon * 1.00f);
+	light = max(light, afternoon * 0.92f);
+	light = max(light, sunset * 0.68f);
+	light = CavFX_Lerp(light, 0.11f, midnight * 0.80f);
+
+	/* Start at night blue, then layer distinct phases. */
+	skyR = 0.035f; skyG = 0.050f; skyB = 0.135f;
+	skyR = CavFX_Lerp(skyR, 0.92f, sunrise * 0.58f);
+	skyG = CavFX_Lerp(skyG, 0.55f, sunrise * 0.48f);
+	skyB = CavFX_Lerp(skyB, 0.34f, sunrise * 0.35f);
+
+	skyR = CavFX_Lerp(skyR, 0.48f, morning * 0.65f);
+	skyG = CavFX_Lerp(skyG, 0.68f, morning * 0.65f);
+	skyB = CavFX_Lerp(skyB, 0.96f, morning * 0.65f);
+
+	skyR = CavFX_Lerp(skyR, 0.58f, noon * 0.85f);
+	skyG = CavFX_Lerp(skyG, 0.78f, noon * 0.85f);
+	skyB = CavFX_Lerp(skyB, 1.00f, noon * 0.85f);
+
+	skyR = CavFX_Lerp(skyR, 0.66f, afternoon * 0.55f);
+	skyG = CavFX_Lerp(skyG, 0.76f, afternoon * 0.55f);
+	skyB = CavFX_Lerp(skyB, 0.92f, afternoon * 0.55f);
+
+	skyR = CavFX_Lerp(skyR, 0.96f, sunset * 0.55f);
+	skyG = CavFX_Lerp(skyG, 0.50f, sunset * 0.45f);
+	skyB = CavFX_Lerp(skyB, 0.22f, sunset * 0.32f);
+
+	skyR = CavFX_Lerp(skyR, 0.055f, night * 0.55f);
+	skyG = CavFX_Lerp(skyG, 0.075f, night * 0.55f);
+	skyB = CavFX_Lerp(skyB, 0.180f, night * 0.55f);
+
+	skyR = CavFX_Lerp(skyR, 0.015f, midnight * 0.80f);
+	skyG = CavFX_Lerp(skyG, 0.020f, midnight * 0.80f);
+	skyB = CavFX_Lerp(skyB, 0.075f, midnight * 0.80f);
+
+	fogR = CavFX_Lerp(skyR, 0.78f, light * 0.16f);
+	fogG = CavFX_Lerp(skyG, 0.86f, light * 0.16f);
+	fogB = CavFX_Lerp(skyB, 1.00f, light * 0.16f);
+
+	sun    = CavFX_Lerp(0.14f, 1.00f, light);
+	shadow = CavFX_Lerp(0.09f, 0.62f, light);
+
+	Env.SkyCol    = PackedCol_Make(CavFX_ToByte(skyR), CavFX_ToByte(skyG), CavFX_ToByte(skyB), 255);
+	Env.FogCol = PackedCol_Make(198, 220, 235, 255); /* neutral fog: avoids custom-color fog glitch */
+	Env.SunCol    = PackedCol_Make(CavFX_ToByte(sun), CavFX_ToByte(sun), CavFX_ToByte(sun), 255);
+	Env.ShadowCol = PackedCol_Make(CavFX_ToByte(shadow), CavFX_ToByte(shadow), CavFX_ToByte(shadow), 255);
+
+	clouds = PackedCol_Make(CavFX_ToByte(CavFX_Lerp(0.20f, 1.00f, light)),
+	                       CavFX_ToByte(CavFX_Lerp(0.22f, 1.00f, light)),
+	                       CavFX_ToByte(CavFX_Lerp(0.30f, 1.00f, light)), 255);
+	Env.CloudsCol = clouds;
+
+	sky = Env.SkyCol;
+	/* Threshold rebuilds reduce flicker on renderers that dislike per-frame VB rebuilds. */
+	if (CavFX_ColorChangedEnough(skyR, skyG, skyB)) {
+		cavfx_last_sky_col = sky;
+		cavfx_last_skyR = skyR; cavfx_last_skyG = skyG; cavfx_last_skyB = skyB;
+		Gfx_DeleteVb(&sky_vb);
+		UpdateFogBlend();
+		EnvRenderer_UpdateFog();
+	}
+	if (cavfx_last_cloudLight < 0.0f || CavFX_AbsF(light - cavfx_last_cloudLight) > 0.018f) {
+		cavfx_last_clouds_col = clouds;
+		cavfx_last_cloudLight = light;
+		Gfx_DeleteVb(&clouds_vb);
+	}
+}
+
 static void DrawSkyY(int x1, int z1, int x2, int z2, int y, struct VertexColoured* v) {
 	int endX = x2, endZ = z2, startZ = z1, axisSize = EnvRenderer_AxisSize();
 	PackedCol col = Env.SkyCol;
@@ -277,6 +402,7 @@ static CC_NOINLINE void BuildSky(void) {
 void EnvRenderer_RenderSky(void) {
 	struct Matrix m;
 	float skyY, normY, dy;
+	CavFX_UpdateDaylightColors();
 	if (EnvRenderer_ShouldRenderSkybox()) return;
 
 	if (!sky_vb) {
@@ -1004,9 +1130,17 @@ static void OnReset(void) {
 	Mem_Free(Weather_Heightmap);
 	Weather_Heightmap = NULL;
 	lastPos = IVec3_MaxValue();
+	cavfx_day_start_time = Game.Time;
+	cavfx_last_skyR = cavfx_last_skyG = cavfx_last_skyB = -1.0f;
+	cavfx_last_cloudLight = -1.0f;
 }
 
-static void OnNewMapLoaded(void) { OnContextRecreated(NULL); }
+static void OnNewMapLoaded(void) {
+	cavfx_day_start_time = Game.Time;
+	cavfx_last_skyR = cavfx_last_skyG = cavfx_last_skyB = -1.0f;
+	cavfx_last_cloudLight = -1.0f;
+	OnContextRecreated(NULL);
+}
 
 struct IGameComponent EnvRenderer_Component = {
 	OnInit,  /* Init  */

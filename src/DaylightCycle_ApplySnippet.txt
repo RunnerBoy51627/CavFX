@@ -1,0 +1,11 @@
+/* Put this inside your existing daylight/environment update function. */
+#include "DaylightCycle.h"
+
+{
+	struct DaylightColors c;
+	DaylightCycle_GetColors(&c);
+
+	/* Replace Env.SkyCol / Env.FogCol with your actual CavFX env color variables if different. */
+	Env.SkyCol = PackedCol_Make((int)(c.skyR * 255), (int)(c.skyG * 255), (int)(c.skyB * 255), 255);
+	Env.FogCol = PackedCol_Make((int)(c.fogR * 255), (int)(c.fogG * 255), (int)(c.fogB * 255), 255);
+}

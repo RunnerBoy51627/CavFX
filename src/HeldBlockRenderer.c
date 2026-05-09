@@ -33,6 +33,10 @@ static cc_bool held_swayInit;
 static float held_lastYaw, held_lastPitch;
 static float held_swayX, held_swayY;
 
+cc_bool HeldBlockRenderer_IsEating;
+static float held_eatTime;
+static float held_eatBlend;
+
 static float ClampFloat(float value, float min, float max) {
 	if (value < min) return min;
 	if (value > max) return max;
@@ -46,6 +50,51 @@ static float AngleDelta(float current, float last) {
 	if (delta < -180.0f) delta += 360.0f;
 	return delta;
 }
+
+void HeldBlockRenderer_StartEating(void) {
+	HeldBlockRenderer_IsEating = true;
+	held_eatTime = 0.0f;
+}
+
+void HeldBlockRenderer_StopEating(void) {
+	HeldBlockRenderer_IsEating = false;
+}
+
+void HeldBlockRenderer_TickEating(float delta) {
+	float target = HeldBlockRenderer_IsEating ? 1.0f : 0.0f;
+	float lerp   = ClampFloat(delta * 12.0f, 0.0f, 1.0f);
+
+	if (HeldBlockRenderer_IsEating) held_eatTime += delta;
+	held_eatBlend = Math_Lerp(held_eatBlend, target, lerp);
+	if (!HeldBlockRenderer_IsEating && held_eatBlend < 0.01f) {
+		held_eatBlend = 0.0f;
+		held_eatTime  = 0.0f;
+	}
+}
+
+/* Minecraft 1.0.0-ish eating: item repeatedly moves up/in toward camera. */
+static void HeldBlockRenderer_EatAnimation(void) {
+	float cycle, bob, shove, ease;
+
+	ease = held_eatBlend;
+	if (ease <= 0.001f) return;
+
+	/* Minecraft 1.0.0-ish bite motion, but smoothed so it does not snap in. */
+	cycle = held_eatTime * 7.5f;
+	bob   = Math_AbsF(Math_SinF(cycle * MATH_PI));
+	bob   = bob * bob;
+	shove = Math_SinF(cycle * MATH_PI * 0.5f);
+
+	held_entity.Position.x += (-0.30f + Math_SinF(cycle * MATH_PI * 2.0f) * 0.030f) * ease;
+	held_entity.Position.y += ( 0.22f + bob * 0.26f) * ease;
+	held_entity.Position.z += ( 0.42f + bob * 0.20f + shove * 0.035f) * ease;
+
+	held_entity.RotX += (42.0f + bob * 32.0f) * ease;
+	held_entity.RotY += (16.0f + shove * 14.0f) * ease;
+	held_entity.Yaw  += (24.0f + bob * 14.0f) * ease;
+}
+
+
 
 /* Since not using Entity_SetModel, which normally automatically does this */
 static void SetHeldModel(struct Model* model) {
@@ -171,6 +220,9 @@ static int HeldItem_CountVertices(int baseX, int baseY) {
 	return count;
 }
 
+static cc_bool HeldBlockRenderer_IsPlantLikeItem(BlockID item);
+static void HeldBlockRenderer_ApplyItemHoldPose(Vec3* p, const Vec3* origin);
+
 static void HeldItem_AddPixel(struct VertexTextured** ptr, int baseX, int baseY, int px, int py,
 							  const Vec3* origin, cc_bool frontOnly) {
 	TextureRec uv;
@@ -198,6 +250,17 @@ static void HeldItem_AddPixel(struct VertexTextured** ptr, int baseX, int baseY,
 	g = HeldItem_Point(x2, y1, z2, origin);
 	h = HeldItem_Point(x1, y1, z2, origin);
 
+	if (!HeldBlockRenderer_IsPlantLikeItem(held_block)) {
+		HeldBlockRenderer_ApplyItemHoldPose(&a, origin);
+		HeldBlockRenderer_ApplyItemHoldPose(&b, origin);
+		HeldBlockRenderer_ApplyItemHoldPose(&c, origin);
+		HeldBlockRenderer_ApplyItemHoldPose(&d, origin);
+		HeldBlockRenderer_ApplyItemHoldPose(&e, origin);
+		HeldBlockRenderer_ApplyItemHoldPose(&f, origin);
+		HeldBlockRenderer_ApplyItemHoldPose(&g, origin);
+		HeldBlockRenderer_ApplyItemHoldPose(&h, origin);
+	}
+
 	frontCol = PACKEDCOL_WHITE;
 	backCol  = PackedCol_Make(150, 150, 150, 255);
 	sideCol  = PackedCol_Make(115, 115, 115, 255);
@@ -214,6 +277,32 @@ static void HeldItem_AddPixel(struct VertexTextured** ptr, int baseX, int baseY,
 	if (!HeldItem_IsOpaque(baseX + px, baseY + py + 1)) HeldItem_AddQuad(ptr, d, c, g, h, uv, sideCol);
 }
 
+static cc_bool HeldBlockRenderer_IsPlantLikeItem(BlockID item) {
+	/* Flowers should stay upright like Minecraft's plant items. */
+#ifdef SURVIVAL_ITEM_ROSE
+	if (item == SURVIVAL_ITEM_ROSE) return true;
+#endif
+#ifdef SURVIVAL_ITEM_YELLOW_FLOWER
+	if (item == SURVIVAL_ITEM_YELLOW_FLOWER) return true;
+#endif
+	return false;
+}
+
+static void HeldBlockRenderer_ApplyItemHoldPose(Vec3* p, const Vec3* origin) {
+	float x, y, angle, cosA, sinA;
+
+	x = p->x - origin->x;
+	y = p->y - origin->y;
+
+	/* Diagonal Minecraft-held item/tool angle instead of straight-up. */
+	angle = -38.0f * MATH_DEG2RAD;
+	cosA  = Math_CosF(angle);
+	sinA  = Math_SinF(angle);
+
+	p->x = origin->x + x * cosA - y * sinA;
+	p->y = origin->y + x * sinA + y * cosA;
+}
+
 static void HeldBlockRenderer_RenderItemFlat(void) {
 	struct VertexTextured* v;
 	TextureLoc loc;
@@ -225,8 +314,8 @@ static void HeldBlockRenderer_RenderItemFlat(void) {
 	if (!Gui.ItemsTex) return;
 
 	loc = SurvivalItem_TextureLoc(held_block);
-	col = Atlas2D_TileX(loc);
-	row = Atlas2D_TileY(loc);
+	col = ((int)loc) & 15;
+	row = ((int)loc) >> 4;
 
 	uv.u1 = col / 16.0f;       uv.v1 = row / 16.0f;
 	uv.u2 = (col + 1) / 16.0f; uv.v2 = (row + 1) / 16.0f;
@@ -242,6 +331,13 @@ static void HeldBlockRenderer_RenderItemFlat(void) {
 	b = HeldItem_Point( size,  size, 0.0f, &origin);
 	c = HeldItem_Point( size, -size, 0.0f, &origin);
 	d = HeldItem_Point(-size, -size, 0.0f, &origin);
+
+	if (!HeldBlockRenderer_IsPlantLikeItem(held_block)) {
+		HeldBlockRenderer_ApplyItemHoldPose(&a, &origin);
+		HeldBlockRenderer_ApplyItemHoldPose(&b, &origin);
+		HeldBlockRenderer_ApplyItemHoldPose(&c, &origin);
+		HeldBlockRenderer_ApplyItemHoldPose(&d, &origin);
+	}
 
 	v = (struct VertexTextured*)Gfx_LockDynamicVb(held_itemVB, VERTEX_FORMAT_TEXTURED, 4);
 	HeldItem_SetVertex(&v[0], a, uv.u1, uv.v1, PACKEDCOL_WHITE);
@@ -279,8 +375,8 @@ static void HeldBlockRenderer_RenderItem(void) {
 
 	if (!Gui.ItemsTex || !HeldItem_EnsureBitmap()) return;
 	loc = SurvivalItem_TextureLoc(held_block);
-	col = Atlas2D_TileX(loc);
-	row = Atlas2D_TileY(loc);
+	col = ((int)loc) & 15;
+	row = ((int)loc) >> 4;
 	baseX = col * HELD_ITEM_TILE_SIZE;
 	baseY = row * HELD_ITEM_TILE_SIZE;
 
@@ -546,6 +642,7 @@ void HeldBlockRenderer_Render(float delta) {
 	DoAnimation(delta, lastSwingY);
 	ApplyHandSway(delta);
 	SetBaseOffset();
+	HeldBlockRenderer_EatAnimation();
 	if (!Camera.Active->isThirdPerson) {
 		if (SurvivalItem_IsItem(held_block)) {
 			HeldBlockRenderer_RenderItem();
@@ -588,6 +685,10 @@ static void OnInit(void) {
 	Event_Register_(&GfxEvents.ContextLost,       NULL, OnContextLost);
 }
 #else
+cc_bool HeldBlockRenderer_IsEating;
+void HeldBlockRenderer_StartEating(void) { HeldBlockRenderer_IsEating = true; }
+void HeldBlockRenderer_StopEating(void) { HeldBlockRenderer_IsEating = false; }
+void HeldBlockRenderer_TickEating(float delta) { }
 void HeldBlockRenderer_ClickAnim(cc_bool digging) { }
 void HeldBlockRenderer_SetMining(cc_bool mining) { }
 void HeldBlockRenderer_Render(float delta) { }

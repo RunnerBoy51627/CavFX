@@ -203,6 +203,8 @@ cc_bool Mob_SpawnZombie(Vec3 pos);
 cc_bool Mob_SpawnSkeleton(Vec3 pos);
 cc_bool Mob_SpawnCreeper(Vec3 pos);
 cc_bool Mob_SpawnSpider(Vec3 pos);
+cc_bool Mob_SpawnPig(Vec3 pos);
+cc_bool Mob_SpawnSheep(Vec3 pos);
 cc_bool Mob_AttackClosest(float reach, int damage);
 void Mob_ClearAll(void);
 

@@ -11,12 +11,26 @@ CC_BEGIN_HEADER
 struct IGameComponent;
 extern struct IGameComponent Inventory_Component;
 
+/* Creative/build inventory category pages */
+enum CreativeInventoryPage {
+	CREATIVE_PAGE_BLOCKS = 0,
+	CREATIVE_PAGE_ITEMS  = 1,
+	CREATIVE_PAGE_MISC   = 2,
+	CREATIVE_PAGE_COUNT  = 3
+};
+extern int Inventory_CreativePage;
+const char* Inventory_CreativePageName(void);
+void Inventory_SetCreativePage(int page);
+void Inventory_NextCreativePage(void);
+void Inventory_PrevCreativePage(void);
+cc_bool Inventory_CreativePageAllows(BlockID block);
+
 /* Number of blocks in each hotbar */
 #define INVENTORY_BLOCKS_PER_HOTBAR 9
 /* Number of hotbars that can be selected between */
 #define INVENTORY_HOTBARS 9
 #define INVENTORY_SURVIVAL_SLOTS 36
-#define INVENTORY_CRAFTING_GRID 4
+#define INVENTORY_CRAFTING_GRID 9
 #define HOTBAR_MAX_INDEX (INVENTORY_BLOCKS_PER_HOTBAR - 1)
 #define INVENTORY_MAX_STACK 64
 
@@ -29,6 +43,8 @@ CC_VAR extern struct _InventoryData {
 	cc_uint8 CraftCounts[INVENTORY_CRAFTING_GRID];
 	BlockID CraftResult;
 	cc_uint8 CraftResultCount;
+	/* Width of current crafting grid: 2 for inventory, 3 for crafting table. */
+	cc_uint8 CraftingWidth;
 	/* Mapping of indices in inventory menu to block IDs. */
 	BlockID Map[BLOCK_COUNT];
 	/* Currently selected index within a hotbar. */
@@ -79,6 +95,7 @@ cc_bool Inventory_TryAdd(BlockID block);
 cc_bool Inventory_TryAddCount(BlockID block, int count);
 /* Removes the block in the currently selected hotbar slot. */
 void Inventory_ConsumeSelected(void);
+void Inventory_SetCraftingGridWidth(int width);
 void Inventory_UpdateCrafting(void);
 cc_bool Inventory_CraftOutput(void);
 void Inventory_ReturnCrafting(void);

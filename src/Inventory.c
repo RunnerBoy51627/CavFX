@@ -8,6 +8,50 @@
 #include "SurvivalItems.h"
 
 struct _InventoryData Inventory;
+int Inventory_CreativePage = CREATIVE_PAGE_BLOCKS;
+
+static cc_bool Inventory_IsMiscBlock(BlockID block) {
+	switch (block) {
+	case BLOCK_AIR:
+	case BLOCK_SAPLING:
+	case BLOCK_DANDELION:
+	case BLOCK_ROSE:
+	case BLOCK_BROWN_SHROOM:
+	case BLOCK_RED_SHROOM:
+	case BLOCK_TNT:
+	case BLOCK_BOOKSHELF:
+	case BLOCK_ROPE:
+	case BLOCK_FIRE:
+	case BLOCK_CRATE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+const char* Inventory_CreativePageName(void) {
+	switch (Inventory_CreativePage) {
+	case CREATIVE_PAGE_ITEMS:  return "Items";
+	case CREATIVE_PAGE_MISC:   return "Misc";
+	default:                   return "Blocks";
+	}
+}
+
+void Inventory_SetCreativePage(int page) {
+	if (page < 0) page = CREATIVE_PAGE_COUNT - 1;
+	if (page >= CREATIVE_PAGE_COUNT) page = 0;
+	Inventory_CreativePage = page;
+}
+
+void Inventory_NextCreativePage(void) { Inventory_SetCreativePage(Inventory_CreativePage + 1); }
+void Inventory_PrevCreativePage(void) { Inventory_SetCreativePage(Inventory_CreativePage - 1); }
+
+cc_bool Inventory_CreativePageAllows(BlockID block) {
+	if (block == BLOCK_AIR) return false;
+	if (SurvivalItem_IsItem(block)) return Inventory_CreativePage == CREATIVE_PAGE_ITEMS;
+	if (Inventory_IsMiscBlock(block)) return Inventory_CreativePage == CREATIVE_PAGE_MISC;
+	return Inventory_CreativePage == CREATIVE_PAGE_BLOCKS;
+}
 
 cc_bool Inventory_CheckChangeSelected(void) {
 	if (!Inventory.CanChangeSelected) {
@@ -255,76 +299,186 @@ static int Inventory_CraftingNonEmpty(void) {
 	return count;
 }
 
-static int Inventory_CraftCount(BlockID block) {
-	int i, count = 0;
-	for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
-		if (Inventory.Craft[i] != block) continue;
-		count += Inventory.CraftCounts[i];
-	}
-	return count;
+static int Inventory_CraftingSlots(void) {
+	int width = Inventory.CraftingWidth ? Inventory.CraftingWidth : 2;
+	return width * width;
 }
 
-static cc_bool Inventory_CraftHasOnly(BlockID blockA, BlockID blockB) {
+void Inventory_SetCraftingGridWidth(int width) {
 	int i;
-	for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
-		if (!Inventory.CraftCounts[i]) continue;
-		if (Inventory.Craft[i] == blockA || Inventory.Craft[i] == blockB) continue;
-		return false;
+	if (width != 3) width = 2;
+	Inventory.CraftingWidth = (cc_uint8)width;
+
+	/* Switching from table crafting back to inventory crafting must not leave
+	   invisible ingredients sitting in slots 4..8. Return them first. */
+	if (width == 2) {
+		for (i = 4; i < INVENTORY_CRAFTING_GRID; i++) {
+			if (Inventory.Craft[i] != BLOCK_AIR && Inventory.CraftCounts[i]) {
+				Inventory_TryAddCount(Inventory.Craft[i], Inventory.CraftCounts[i]);
+			}
+			Inventory.Craft[i] = BLOCK_AIR;
+			Inventory.CraftCounts[i] = 0;
+		}
+	}
+	Inventory_UpdateCrafting();
+}
+
+static cc_bool Inventory_CraftSlotEmpty(int slot) {
+	return Inventory.Craft[slot] == BLOCK_AIR || !Inventory.CraftCounts[slot];
+}
+
+static cc_bool Inventory_CraftSlotHas(int slot, BlockID block) {
+	return Inventory.Craft[slot] == block && Inventory.CraftCounts[slot];
+}
+
+static cc_bool Inventory_CraftOnlyUsesSlots(int slots) {
+	int i;
+	for (i = slots; i < INVENTORY_CRAFTING_GRID; i++) {
+		if (!Inventory_CraftSlotEmpty(i)) return false;
 	}
 	return true;
 }
 
+static cc_bool Inventory_CraftExact2(BlockID a, BlockID b, BlockID c, BlockID d) {
+	return Inventory_CraftOnlyUsesSlots(4)
+		&& (a == BLOCK_AIR ? Inventory_CraftSlotEmpty(0) : Inventory_CraftSlotHas(0, a))
+		&& (b == BLOCK_AIR ? Inventory_CraftSlotEmpty(1) : Inventory_CraftSlotHas(1, b))
+		&& (c == BLOCK_AIR ? Inventory_CraftSlotEmpty(2) : Inventory_CraftSlotHas(2, c))
+		&& (d == BLOCK_AIR ? Inventory_CraftSlotEmpty(3) : Inventory_CraftSlotHas(3, d));
+}
+
+static cc_bool Inventory_CraftExact3(BlockID a, BlockID b, BlockID c, BlockID d, BlockID e, BlockID f, BlockID g, BlockID h, BlockID i) {
+	return Inventory.CraftingWidth == 3
+		&& (a == BLOCK_AIR ? Inventory_CraftSlotEmpty(0) : Inventory_CraftSlotHas(0, a))
+		&& (b == BLOCK_AIR ? Inventory_CraftSlotEmpty(1) : Inventory_CraftSlotHas(1, b))
+		&& (c == BLOCK_AIR ? Inventory_CraftSlotEmpty(2) : Inventory_CraftSlotHas(2, c))
+		&& (d == BLOCK_AIR ? Inventory_CraftSlotEmpty(3) : Inventory_CraftSlotHas(3, d))
+		&& (e == BLOCK_AIR ? Inventory_CraftSlotEmpty(4) : Inventory_CraftSlotHas(4, e))
+		&& (f == BLOCK_AIR ? Inventory_CraftSlotEmpty(5) : Inventory_CraftSlotHas(5, f))
+		&& (g == BLOCK_AIR ? Inventory_CraftSlotEmpty(6) : Inventory_CraftSlotHas(6, g))
+		&& (h == BLOCK_AIR ? Inventory_CraftSlotEmpty(7) : Inventory_CraftSlotHas(7, h))
+		&& (i == BLOCK_AIR ? Inventory_CraftSlotEmpty(8) : Inventory_CraftSlotHas(8, i));
+}
+
+static cc_bool Inventory_CraftSingle(BlockID block) {
+	int i, slots = Inventory_CraftingSlots();
+	for (i = 0; i < slots; i++) {
+		if (Inventory_CraftSlotHas(i, block) && Inventory_CraftingNonEmpty() == 1) return true;
+	}
+	return false;
+}
+
+static cc_bool Inventory_CraftVerticalPair(BlockID block) {
+	if (Inventory.CraftingWidth == 2) {
+		return Inventory_CraftExact2(block, BLOCK_AIR, block, BLOCK_AIR)
+			|| Inventory_CraftExact2(BLOCK_AIR, block, BLOCK_AIR, block);
+	}
+	return Inventory_CraftExact3(block, BLOCK_AIR, BLOCK_AIR, block, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR)
+		|| Inventory_CraftExact3(BLOCK_AIR, block, BLOCK_AIR, BLOCK_AIR, block, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR)
+		|| Inventory_CraftExact3(BLOCK_AIR, BLOCK_AIR, block, BLOCK_AIR, BLOCK_AIR, block, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR)
+		|| Inventory_CraftExact3(BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, block, BLOCK_AIR, BLOCK_AIR, block, BLOCK_AIR, BLOCK_AIR)
+		|| Inventory_CraftExact3(BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, block, BLOCK_AIR, BLOCK_AIR, block, BLOCK_AIR)
+		|| Inventory_CraftExact3(BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, block, BLOCK_AIR, BLOCK_AIR, block);
+}
+
+static cc_bool Inventory_Craft2x2Square(BlockID block) {
+	if (Inventory.CraftingWidth == 2) {
+		return Inventory_CraftExact2(block, block, block, block);
+	}
+	return Inventory_CraftExact3(block, block, BLOCK_AIR, block, block, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR)
+		|| Inventory_CraftExact3(BLOCK_AIR, block, block, BLOCK_AIR, block, block, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR)
+		|| Inventory_CraftExact3(BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, block, block, BLOCK_AIR, block, block, BLOCK_AIR)
+		|| Inventory_CraftExact3(BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, block, block, BLOCK_AIR, block, block);
+}
+
+static cc_bool Inventory_CraftSword(BlockID material) {
+	return Inventory.CraftingWidth == 3 && (
+		Inventory_CraftExact3(material, BLOCK_AIR, BLOCK_AIR, material, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR, BLOCK_AIR) ||
+		Inventory_CraftExact3(BLOCK_AIR, material, BLOCK_AIR, BLOCK_AIR, material, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR) ||
+		Inventory_CraftExact3(BLOCK_AIR, BLOCK_AIR, material, BLOCK_AIR, BLOCK_AIR, material, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK));
+}
+
+static cc_bool Inventory_CraftPickaxe(BlockID material) {
+	return Inventory_CraftExact3(material, material, material, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR);
+}
+
+static cc_bool Inventory_CraftShovel(BlockID material) {
+	return Inventory.CraftingWidth == 3 && (
+		Inventory_CraftExact3(material, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR, BLOCK_AIR) ||
+		Inventory_CraftExact3(BLOCK_AIR, material, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR) ||
+		Inventory_CraftExact3(BLOCK_AIR, BLOCK_AIR, material, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK));
+}
+
+static cc_bool Inventory_CraftAxe(BlockID material) {
+	return Inventory.CraftingWidth == 3 && (
+		Inventory_CraftExact3(material, material, BLOCK_AIR, material, SURVIVAL_ITEM_STICK, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR) ||
+		Inventory_CraftExact3(BLOCK_AIR, material, material, BLOCK_AIR, SURVIVAL_ITEM_STICK, material, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR));
+}
+
+static cc_bool Inventory_CraftHoe(BlockID material) {
+	return Inventory.CraftingWidth == 3 && (
+		Inventory_CraftExact3(material, material, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR) ||
+		Inventory_CraftExact3(BLOCK_AIR, material, material, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR, BLOCK_AIR, SURVIVAL_ITEM_STICK, BLOCK_AIR));
+}
+
+static void Inventory_SetCraftResult(BlockID result, int count) {
+	Inventory.CraftResult = result;
+	Inventory.CraftResultCount = (cc_uint8)count;
+}
+
 void Inventory_UpdateCrafting(void) {
-	int i, nonEmpty = Inventory_CraftingNonEmpty();
 	Inventory.CraftResult = BLOCK_AIR;
 	Inventory.CraftResultCount = 0;
+	if (!Inventory.CraftingWidth) Inventory.CraftingWidth = 2;
 
 	/* 1 log -> 4 planks */
-	if (nonEmpty == 1) {
-		for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
-			if (Inventory.Craft[i] != BLOCK_LOG || !Inventory.CraftCounts[i]) continue;
-			Inventory.CraftResult = BLOCK_WOOD;
-			Inventory.CraftResultCount = 4;
-			return;
-		}
-	}
-
-	/*
-	 * CavFX currently has a 2x2 survival crafting grid.
-	 * These are simplified pickaxe recipes until a 3x3 crafting table exists.
-	 *
-	 * Wooden pickaxe: 4 wood
-	 * Stone pickaxe: 3 cobble + 1 wood
-	 * Iron pickaxe: 3 iron + 1 wood
-	 * Diamond pickaxe: 3 cyan + 1 wood
-	 */
-	if (Inventory_CraftCount(BLOCK_WOOD) >= 4 && Inventory_CraftHasOnly(BLOCK_WOOD, BLOCK_AIR)) {
-		Inventory.CraftResult = SURVIVAL_ITEM_WOOD_PICKAXE;
-		Inventory.CraftResultCount = 1;
+	if (Inventory_CraftSingle(BLOCK_LOG)) {
+		Inventory_SetCraftResult(BLOCK_WOOD, 4);
 		return;
 	}
 
-	if (Inventory_CraftCount(BLOCK_COBBLE) >= 3 && Inventory_CraftCount(BLOCK_WOOD) >= 1 &&
-		Inventory_CraftHasOnly(BLOCK_COBBLE, BLOCK_WOOD)) {
-		Inventory.CraftResult = SURVIVAL_ITEM_STONE_PICKAXE;
-		Inventory.CraftResultCount = 1;
+	/* 2 planks vertically -> 4 sticks */
+	if (Inventory_CraftVerticalPair(BLOCK_WOOD)) {
+		Inventory_SetCraftResult(SURVIVAL_ITEM_STICK, 4);
 		return;
 	}
 
-	if (Inventory_CraftCount(BLOCK_IRON) >= 3 && Inventory_CraftCount(BLOCK_WOOD) >= 1 &&
-		Inventory_CraftHasOnly(BLOCK_IRON, BLOCK_WOOD)) {
-		Inventory.CraftResult = SURVIVAL_ITEM_IRON_PICKAXE;
-		Inventory.CraftResultCount = 1;
+	/* 4 planks in a square -> crafting table */
+	if (Inventory_Craft2x2Square(BLOCK_WOOD)) {
+		Inventory_SetCraftResult(BLOCK_CRAFTING_TABLE, 1);
 		return;
 	}
 
-	/* Placeholder diamond ingredient: Classic has no diamond block/item yet, so cyan is used for now. */
-	if (Inventory_CraftCount(BLOCK_CYAN) >= 3 && Inventory_CraftCount(BLOCK_WOOD) >= 1 &&
-		Inventory_CraftHasOnly(BLOCK_CYAN, BLOCK_WOOD)) {
-		Inventory.CraftResult = SURVIVAL_ITEM_DIAMOND_PICKAXE;
-		Inventory.CraftResultCount = 1;
-		return;
-	}
+	/* Real 3x3 tools. These only work from the crafting table UI. */
+	if (Inventory_CraftPickaxe(BLOCK_WOOD))   { Inventory_SetCraftResult(SURVIVAL_ITEM_WOOD_PICKAXE, 1); return; }
+	if (Inventory_CraftPickaxe(BLOCK_COBBLE)) { Inventory_SetCraftResult(SURVIVAL_ITEM_STONE_PICKAXE, 1); return; }
+	if (Inventory_CraftPickaxe(BLOCK_IRON))   { Inventory_SetCraftResult(SURVIVAL_ITEM_IRON_PICKAXE, 1); return; }
+	if (Inventory_CraftPickaxe(BLOCK_GOLD))   { Inventory_SetCraftResult(SURVIVAL_ITEM_GOLD_PICKAXE, 1); return; }
+	if (Inventory_CraftPickaxe(BLOCK_CYAN))   { Inventory_SetCraftResult(SURVIVAL_ITEM_DIAMOND_PICKAXE, 1); return; }
+
+	if (Inventory_CraftSword(BLOCK_WOOD))     { Inventory_SetCraftResult(SURVIVAL_ITEM_WOOD_SWORD, 1); return; }
+	if (Inventory_CraftSword(BLOCK_COBBLE))   { Inventory_SetCraftResult(SURVIVAL_ITEM_STONE_SWORD, 1); return; }
+	if (Inventory_CraftSword(BLOCK_IRON))     { Inventory_SetCraftResult(SURVIVAL_ITEM_IRON_SWORD, 1); return; }
+	if (Inventory_CraftSword(BLOCK_GOLD))     { Inventory_SetCraftResult(SURVIVAL_ITEM_GOLD_SWORD, 1); return; }
+	if (Inventory_CraftSword(BLOCK_CYAN))     { Inventory_SetCraftResult(SURVIVAL_ITEM_DIAMOND_SWORD, 1); return; }
+
+	if (Inventory_CraftAxe(BLOCK_WOOD))       { Inventory_SetCraftResult(SURVIVAL_ITEM_WOOD_AXE, 1); return; }
+	if (Inventory_CraftAxe(BLOCK_COBBLE))     { Inventory_SetCraftResult(SURVIVAL_ITEM_STONE_AXE, 1); return; }
+	if (Inventory_CraftAxe(BLOCK_IRON))       { Inventory_SetCraftResult(SURVIVAL_ITEM_IRON_AXE, 1); return; }
+	if (Inventory_CraftAxe(BLOCK_GOLD))       { Inventory_SetCraftResult(SURVIVAL_ITEM_GOLD_AXE, 1); return; }
+	if (Inventory_CraftAxe(BLOCK_CYAN))       { Inventory_SetCraftResult(SURVIVAL_ITEM_DIAMOND_AXE, 1); return; }
+
+	if (Inventory_CraftShovel(BLOCK_WOOD))    { Inventory_SetCraftResult(SURVIVAL_ITEM_WOOD_SHOVEL, 1); return; }
+	if (Inventory_CraftShovel(BLOCK_COBBLE))  { Inventory_SetCraftResult(SURVIVAL_ITEM_STONE_SHOVEL, 1); return; }
+	if (Inventory_CraftShovel(BLOCK_IRON))    { Inventory_SetCraftResult(SURVIVAL_ITEM_IRON_SHOVEL, 1); return; }
+	if (Inventory_CraftShovel(BLOCK_GOLD))    { Inventory_SetCraftResult(SURVIVAL_ITEM_GOLD_SHOVEL, 1); return; }
+	if (Inventory_CraftShovel(BLOCK_CYAN))    { Inventory_SetCraftResult(SURVIVAL_ITEM_DIAMOND_SHOVEL, 1); return; }
+
+	if (Inventory_CraftHoe(BLOCK_WOOD))       { Inventory_SetCraftResult(SURVIVAL_ITEM_WOOD_HOE, 1); return; }
+	if (Inventory_CraftHoe(BLOCK_COBBLE))     { Inventory_SetCraftResult(SURVIVAL_ITEM_STONE_HOE, 1); return; }
+	if (Inventory_CraftHoe(BLOCK_IRON))       { Inventory_SetCraftResult(SURVIVAL_ITEM_IRON_HOE, 1); return; }
+	if (Inventory_CraftHoe(BLOCK_GOLD))       { Inventory_SetCraftResult(SURVIVAL_ITEM_GOLD_HOE, 1); return; }
+	if (Inventory_CraftHoe(BLOCK_CYAN))       { Inventory_SetCraftResult(SURVIVAL_ITEM_DIAMOND_HOE, 1); return; }
 }
 
 cc_bool Inventory_CraftOutput(void) {

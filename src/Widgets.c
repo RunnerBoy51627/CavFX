@@ -909,6 +909,7 @@ void TableWidget_RecreateBlocks(struct TableWidget* w) {
 		for (; i < rowEnd; i++) {
 			block = Inventory.Map[i];
 			if (block > max && !SurvivalItem_IsItem(block)) continue;
+			if (!Inventory_CreativePageAllows(block)) continue;
 			
 			w->blockRawSlots[w->blocksCount] = -1;
 			w->blocks[w->blocksCount++] = block;

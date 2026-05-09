@@ -17,4 +17,10 @@ void HeldBlockRenderer_SetMining(cc_bool mining);
 void HeldBlockRenderer_Render(float delta);
 
 CC_END_HEADER
+
+/* CavFX survival eating animation */
+extern cc_bool HeldBlockRenderer_IsEating;
+void HeldBlockRenderer_StartEating(void);
+void HeldBlockRenderer_StopEating(void);
+void HeldBlockRenderer_TickEating(float delta);
 #endif

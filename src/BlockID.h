@@ -76,11 +76,12 @@ enum BLOCKID {
 	BLOCK_PILLAR = 63,
 	BLOCK_CRATE = 64,
 	BLOCK_STONE_BRICK = 65,
+	BLOCK_CRAFTING_TABLE = 66,
 
 	/* Max block ID used in original classic */
 	BLOCK_MAX_ORIGINAL = BLOCK_OBSIDIAN,
 	/* Max block ID used in original classic plus CPE blocks. */
-	BLOCK_MAX_CPE = BLOCK_STONE_BRICK,
+	BLOCK_MAX_CPE = BLOCK_CRAFTING_TABLE,
 
 #if defined EXTENDED_BLOCKS
 	BLOCK_MAX_DEFINED = 0x2FF,

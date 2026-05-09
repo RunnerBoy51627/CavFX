@@ -16,3 +16,14 @@
 	// but just to be on the safe side, ensure that it's always exported
 	#define PLUGIN_EXPORT __attribute__((visibility("default")))
 #endif
+
+
+/* CavFX modloader marker.
+   CavFX refuses to load plugins that do not export this symbol,
+   which prevents plain ClassiCube plugins from being accepted as CavFX mods.
+
+   Put this once in your plugin .c file:
+       CAVFX_PLUGIN_MARKER
+*/
+#define CAVFX_PLUGIN_MARKER \
+	PLUGIN_EXPORT const char* CavFX_ModloaderTarget = "CavFX";

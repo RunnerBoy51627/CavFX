@@ -321,11 +321,42 @@ void Audio_PlayOuchSound(void) {
 /*########################################################################################################################*
 *--------------------------------------------------------Music------------------------------------------------------------*
 *#########################################################################################################################*/
-#ifdef CC_BUILD_NOMUSIC
+#if defined(CC_BUILD_WEB)
+/* Web builds do not use the normal streamed OGG decoder path.
+   Instead, JS plays preloaded audio .ogg files through an HTMLAudioElement.
+   This avoids the old "Music is not supported currently" path. */
+extern int  interop_WebMusicStart(int volume);
+extern void interop_WebMusicStop(void);
+extern void interop_WebMusicSetVolume(int volume);
+
+static void Music_Init(void) {
+	int volume = Options_GetInt(OPT_MUSIC_VOLUME, 0, 100, DEFAULT_MUSIC_VOLUME);
+	Audio_SetMusic(volume);
+}
+
+static void Music_Stop(void);
+static void Music_Free(void) {
+	Music_Stop();
+}
+
+static void Music_Stop(void) {
+	interop_WebMusicStop();
+}
+
+static void Music_Start(void) {
+	if (!AudioBackend_Init()) {
+		AudioBackend_Free();
+		Audio_MusicVolume = 0;
+		return;
+	}
+	interop_WebMusicStart(Audio_MusicVolume);
+}
+#elif defined(CC_BUILD_NOMUSIC)
 /* Can't use mojang's music assets, so just stub everything out */
 static void Music_Init(void) { }
 static void Music_Free(void) { }
-static void Music_Stop(void) { }
+static void Music_Stop(void) {
+}
 static void Music_Start(void) {
 	Chat_AddRaw("&cMusic is not supported currently");
 	Audio_MusicVolume = 0;
@@ -568,8 +599,17 @@ void Audio_SetSounds(int volume) {
 
 void Audio_SetMusic(int volume) {
 	Audio_MusicVolume = volume;
+#ifdef CC_BUILD_WEB
+	if (volume) {
+		Music_Start();
+		interop_WebMusicSetVolume(volume);
+	} else {
+		Music_Stop();
+	}
+#else
 	if (volume) Music_Start();
 	else        Music_Stop();
+#endif
 }
 
 static void OnInit(void) {
