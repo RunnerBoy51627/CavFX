@@ -40,12 +40,6 @@
 #include "Entity.h"
 #include "Constants.h"
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
-#include <stdio.h>
-#include <string.h>
-
 /*########################################################################################################################*
 *--------------------------------------------------------Menu base--------------------------------------------------------*
 *#########################################################################################################################*/
@@ -520,218 +514,14 @@ static void MainMenuScreen_Render(void* screen, float delta) {
 	Screen_Render2Widgets(screen, delta);
 }
 
-
-/*########################################################################################################################*
-*----------------------------------------------------Forged menu bridge---------------------------------------------------*
-*#########################################################################################################################*/
-#define FORGED_INSTALLER_NAME "CavFXForgedInstaller.dll"
-
-static void Forged_GetExeDir(char* dst, int dstSize) {
-#ifdef _WIN32
-	DWORD len;
-	char* slash;
-
-	if (!dst || dstSize <= 0) return;
-	dst[0] = '\0';
-
-	len = GetModuleFileNameA(NULL, dst, dstSize);
-	if (!len || len >= (DWORD)dstSize) {
-		dst[0] = '\0';
-		return;
-	}
-
-	slash = strrchr(dst, '\\');
-	if (slash) *slash = '\0';
-#else
-	if (!dst || dstSize <= 0) return;
-	dst[0] = '.';
-	dst[1] = '\0';
-#endif
-}
-
-static void Forged_BuildExePath(char* dst, int dstSize, const char* relPath) {
-	char exeDir[1024];
-
-	if (!dst || dstSize <= 0) return;
-	Forged_GetExeDir(exeDir, sizeof(exeDir));
-
-#ifdef _WIN32
-	snprintf(dst, dstSize, "%s\\%s", exeDir, relPath);
-#else
-	snprintf(dst, dstSize, "%s/%s", exeDir, relPath);
-#endif
-}
-
-static cc_bool Forged_FileExists(const char* path) {
-	FILE* f;
-
-	f = fopen(path, "rb");
-	if (!f) return false;
-
-	fclose(f);
-	return true;
-}
-
-static cc_bool Forged_WriteTextFile(const char* path, const char* text) {
-	FILE* f;
-
-	f = fopen(path, "wb");
-	if (!f) return false;
-
-	fwrite(text, 1, strlen(text), f);
-	fclose(f);
-	return true;
-}
-
-static cc_bool Forged_DeleteFile(const char* path) {
-	if (!Forged_FileExists(path)) return true;
-
-#ifdef _WIN32
-	DeleteFileA(path);
-#else
-	remove(path);
-#endif
-
-	return !Forged_FileExists(path);
-}
-
-static cc_bool Forged_CoreExists(void) {
-	char path[1024];
-
-	Forged_BuildExePath(path, sizeof(path), "ForgedCore\\forged.core");
-	if (Forged_FileExists(path)) return true;
-
-	return Forged_FileExists("ForgedCore/forged.core") || Forged_FileExists("ForgedCore\\forged.core");
-}
-
-static cc_bool Forged_Disabled(void) {
-	char path[1024];
-
-	Forged_BuildExePath(path, sizeof(path), "ForgedCore\\forged.disabled");
-	if (Forged_FileExists(path)) return true;
-
-	return Forged_FileExists("ForgedCore/forged.disabled") || Forged_FileExists("ForgedCore\\forged.disabled");
-}
-
-static cc_bool Forged_Enabled(void) {
-	if (!Forged_CoreExists()) return false;
-
-	/* New rule: forged.disabled wins. The old forged.enabled file is ignored for OFF/ON state. */
-	return !Forged_Disabled();
-}
-
-static cc_bool Forged_InstallerExists(void) {
-	char path[1024];
-
-	Forged_BuildExePath(path, sizeof(path), "plugins\\CavFXForgedInstaller.dll");
-	if (Forged_FileExists(path)) return true;
-
-	return Forged_FileExists("plugins/CavFXForgedInstaller.dll") || Forged_FileExists("plugins\\CavFXForgedInstaller.dll");
-}
-
-static cc_bool Forged_RunInstaller(void) {
-#ifdef _WIN32
-	char path[1024];
-	HMODULE lib;
-	FARPROC proc;
-	FARPROC updateProc;
-	typedef int (*InstallFunc)(void);
-	typedef void (*UpdateFunc)(void);
-	InstallFunc install;
-	UpdateFunc update;
-	int i;
-
-	Forged_BuildExePath(path, sizeof(path), "plugins\\CavFXForgedInstaller.dll");
-	if (!Forged_FileExists(path)) snprintf(path, sizeof(path), "plugins\\CavFXForgedInstaller.dll");
-
-	lib = LoadLibraryA(path);
-	if (!lib) return false;
-
-	proc = GetProcAddress(lib, "CavFXForged_Install");
-	if (!proc) proc = GetProcAddress(lib, "Plugin_Entry");
-	if (!proc) proc = GetProcAddress(lib, "Plugin_Load");
-	if (!proc) {
-		FreeLibrary(lib);
-		return false;
-	}
-
-	install = (InstallFunc)proc;
-	install();
-
-	updateProc = GetProcAddress(lib, "CavFXForged_UIUpdate_Export");
-	if (updateProc) {
-		update = (UpdateFunc)updateProc;
-		for (i = 0; i < 16; i++) update();
-	}
-
-	return true;
-#else
-	return false;
-#endif
-}
-
-static void Forged_DeleteOldEnabledFlags(void) {
-	char path[1024];
-
-	Forged_BuildExePath(path, sizeof(path), "ForgedCore\\forged.enabled");
-	Forged_DeleteFile(path);
-	Forged_DeleteFile("ForgedCore/forged.enabled");
-	Forged_DeleteFile("ForgedCore\\forged.enabled");
-}
-
-static cc_bool Forged_Enable(void) {
-	char path[1024];
-
-	if (!Forged_CoreExists()) return false;
-
-	/* Enabling = delete disabled flag. */
-	Forged_BuildExePath(path, sizeof(path), "ForgedCore\\forged.disabled");
-	Forged_DeleteFile(path);
-	Forged_DeleteFile("ForgedCore/forged.disabled");
-	Forged_DeleteFile("ForgedCore\\forged.disabled");
-
-	return Forged_Enabled();
-}
-
-static cc_bool Forged_Disable(void) {
-	char path[1024];
-	cc_bool wrote;
-
-	if (!Forged_CoreExists()) return false;
-
-	/* Disable = create disabled flag. Also delete old enabled flag so old state does not fight us. */
-	Forged_DeleteOldEnabledFlags();
-
-	Forged_BuildExePath(path, sizeof(path), "ForgedCore\\forged.disabled");
-	wrote = Forged_WriteTextFile(path, "CavFX Forged disabled.\nDelete this file or click Enable Forged to enable Forged again.\n");
-	if (!wrote) {
-		wrote = Forged_WriteTextFile("ForgedCore/forged.disabled", "CavFX Forged disabled.\nDelete this file or click Enable Forged to enable Forged again.\n");
-	}
-	if (!wrote) return false;
-
-	return !Forged_Enabled();
-}
-
-static const char* Forged_ButtonText(void) {
-	if (Forged_CoreExists()) {
-		return Forged_Enabled() ? "Disable Forged" : "Enable Forged";
-	}
-	return Forged_InstallerExists() ? "Install Forged" : "Enable Forged (Installer missing)";
-}
-
-static cc_bool Forged_ButtonEnabled(void) {
-	return Forged_CoreExists() || Forged_InstallerExists();
-}
-
-
 /*########################################################################################################################*
 *-----------------------------------------------------MainMenuScreen------------------------------------------------------*
 *#########################################################################################################################*/
 static struct MainMenuScreen {
 	Screen_Body
 		struct FontDesc titleFont, textFont;
-	struct TextWidget title;
-	struct ButtonWidget create, load, join, mode, username, forged, quit;
+	struct TextWidget title, splash;
+	struct ButtonWidget create, load, join, mode, username, quit;
 	struct Widget* __widgets[8];
 } MainMenuScreen;
 
@@ -740,6 +530,49 @@ static struct MenuInputDesc MainMenu_LanInput;
 static struct MenuInputDesc MainMenu_UsernameInput;
 static cc_string MainMenu_LanDefault = String_FromConst("127.0.0.1:25565");
 static cc_bool MainMenu_AskedUsername;
+
+static void MainMenuScreen_UpdateSplash(struct MainMenuScreen* s) {
+	cc_string path = String_FromConst("splashtext.txt");
+	cc_filepath raw_path;
+	struct Stream stream, buffered;
+	cc_uint8 buffer[512];
+	cc_string line, chosen;
+	char lineBuffer[STRING_SIZE], chosenBuffer[STRING_SIZE];
+	RNGState rnd;
+	int count = 0;
+	cc_result res;
+
+	String_InitArray(chosen, chosenBuffer);
+	String_AppendConst(&chosen, "Now with CavLAN!");
+
+	Platform_EncodePath(&raw_path, &path);
+	res = Stream_OpenPath(&stream, &raw_path);
+	if (!res) {
+		Random_SeedFromCurrentTime(&rnd);
+		Stream_ReadonlyBuffered(&buffered, &stream, buffer, sizeof(buffer));
+
+		for (;;) {
+			String_InitArray(line, lineBuffer);
+			res = Stream_ReadLine(&buffered, &line);
+			if (res) break;
+
+			String_UNSAFE_TrimStart(&line);
+			String_UNSAFE_TrimEnd(&line);
+			if (!line.length) continue;
+
+			count++;
+			if (Random_Next(&rnd, count) == 0) {
+				chosen.length = 0;
+				String_AppendString(&chosen, &line);
+			}
+		}
+		stream.Close(&stream);
+	}
+
+	TextWidget_Set(&s->splash, &chosen, &s->textFont);
+	/* Classic splash text yellow */
+	s->splash.color = PackedCol_Make(255, 255, 85, 255);
+}
 
 static void MainMenuScreen_UpdateMode(struct MainMenuScreen* s) {
 	ButtonWidget_SetConst(&s->mode, MainMenu_Creative ? "Gamemode: Creative" : "Gamemode: Survival", &s->titleFont);
@@ -873,47 +706,6 @@ static void MainMenuScreen_Mode(void* screen, void* widget) {
 	*/
 }
 
-
-static void MainMenuScreen_Forged(void* screen, void* widget) {
-	struct MainMenuScreen* s = (struct MainMenuScreen*)screen;
-
-	if (!Forged_CoreExists()) {
-		if (!Forged_InstallerExists()) {
-			Chat_AddRaw("&cForged installer DLL missing from plugins folder.");
-			return;
-		}
-
-		if (Forged_RunInstaller()) {
-			Chat_AddRaw("&eForged installer ran. Core installed. You can enable Forged from the menu.");
-		} else {
-			Chat_AddRaw("&cFailed to run Forged installer DLL.");
-		}
-
-		ButtonWidget_SetConst(&s->forged, Forged_ButtonText(), &s->titleFont);
-		Widget_SetDisabled(&s->forged, !Forged_ButtonEnabled());
-		s->dirty = true;
-		return;
-	}
-
-	if (Forged_Enabled()) {
-		if (Forged_Disable()) {
-			Chat_AddRaw("&eForged disabled instantly. Loaded mods may unload after restart.");
-		} else {
-			Chat_AddRaw("&cFailed to disable Forged.");
-		}
-	} else {
-		if (Forged_Enable()) {
-			Chat_AddRaw("&aForged enabled instantly. Mods may load after restart.");
-		} else {
-			Chat_AddRaw("&cFailed to enable Forged.");
-		}
-	}
-
-	ButtonWidget_SetConst(&s->forged, Forged_ButtonText(), &s->titleFont);
-	Widget_SetDisabled(&s->forged, !Forged_ButtonEnabled());
-	s->dirty = true;
-}
-
 static void MainMenuScreen_Quit(void* screen, void* widget) {
 	Game_Running = false;
 }
@@ -937,26 +729,25 @@ static void MainMenuScreen_ContextRecreated(void* screen) {
 	Gui_MakeBodyFont(&s->textFont);
 
 	TextWidget_SetConst(&s->title, "CavFX", &s->titleFont);
+	MainMenuScreen_UpdateSplash(s);
 	ButtonWidget_SetConst(&s->create, "Create world...", &s->titleFont);
 	ButtonWidget_SetConst(&s->load, "Load world...", &s->titleFont);
 	ButtonWidget_SetConst(&s->join, "Join LAN...", &s->titleFont);
 	MainMenuScreen_UpdateUsername(s);
 	//MainMenuScreen_UpdateMode(s);
-	ButtonWidget_SetConst(&s->forged, Forged_ButtonText(), &s->titleFont);
-	Widget_SetDisabled(&s->forged, !Forged_ButtonEnabled());
 	ButtonWidget_SetConst(&s->quit, "Quit", &s->titleFont);
 }
 
 static void MainMenuScreen_Layout(void* screen) {
 	struct MainMenuScreen* s = (struct MainMenuScreen*)screen;
-	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -150);
+	Widget_SetLocation(&s->title,  ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -150);
+	Widget_SetLocation(&s->splash, ANCHOR_CENTRE, ANCHOR_CENTRE, 80, -118);
 	Widget_SetLocation(&s->create, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -80);
 	Widget_SetLocation(&s->load, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -35);
 	Widget_SetLocation(&s->join, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 10);
 	//Widget_SetLocation(&s->mode, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 55);
 	Widget_SetLocation(&s->username, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 55);
-	Widget_SetLocation(&s->forged, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 100);
-	Widget_SetLocation(&s->quit, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 145);
+	Widget_SetLocation(&s->quit, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 100);
 }
 
 static void MainMenuScreen_Init(void* screen) {
@@ -968,11 +759,11 @@ static void MainMenuScreen_Init(void* screen) {
 	s->widgetsPerPage = 5;
 
 	TextWidget_Add(s, &s->title);
+	TextWidget_Add(s, &s->splash);
 	ButtonWidget_Add(s, &s->create, 300, MainMenuScreen_Create);
 	ButtonWidget_Add(s, &s->load, 300, MainMenuScreen_Load);
 	ButtonWidget_Add(s, &s->join, 300, MainMenuScreen_Join);
 	ButtonWidget_Add(s, &s->username, 300, MainMenuScreen_Username);
-	ButtonWidget_Add(s, &s->forged, 300, MainMenuScreen_Forged);
 	ButtonWidget_Add(s, &s->quit, 300, MainMenuScreen_Quit);
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);

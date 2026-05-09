@@ -73,6 +73,30 @@ CC_VAR extern struct _ServerConnectionData {
 	cc_bool SupportsNotifyAction;
 } Server;
 
+
+/* CavLAN is treated as a real multiplayer session with LAN conveniences layered on top. */
+enum CavLANRole {
+	CAVLAN_ROLE_NONE = 0,
+	CAVLAN_ROLE_HOST = 1,
+	CAVLAN_ROLE_CLIENT = 2
+};
+
+CC_VAR extern struct CavLANSessionState {
+	cc_bool Active;
+	cc_bool Hosting;
+	cc_bool Connected;
+	cc_bool IsLoopback;
+	enum CavLANRole Role;
+	cc_string Address;
+	char AddressBuffer[STRING_SIZE];
+	int Port;
+} CavLAN;
+
+cc_bool CavLAN_IsActive(void);
+cc_bool CavLAN_IsHost(void);
+cc_bool CavLAN_IsClient(void);
+void CavLAN_Reset(void);
+
 void Server_LeaveLAN(void);
 /* If user hasn't previously accepted url, displays a dialog asking to confirm downloading it */
 /* Otherwise just calls TexturePack_Extract */

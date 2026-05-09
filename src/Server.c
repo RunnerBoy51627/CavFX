@@ -50,6 +50,27 @@ static char motdBuffer[STRING_SIZE];
 static char appBuffer[STRING_SIZE];
 static int ticks;
 struct _ServerConnectionData Server;
+struct CavLANSessionState CavLAN;
+
+static void CavLAN_SetAddress(const cc_string* address, int port) {
+	CavLAN.Address.length = 0;
+	if (address) String_Copy(&CavLAN.Address, address);
+	CavLAN.Port = port;
+}
+
+void CavLAN_Reset(void) {
+	CavLAN.Active     = false;
+	CavLAN.Hosting    = false;
+	CavLAN.Connected  = false;
+	CavLAN.IsLoopback = false;
+	CavLAN.Role       = CAVLAN_ROLE_NONE;
+	CavLAN.Port       = 0;
+	CavLAN.Address.length = 0;
+}
+
+cc_bool CavLAN_IsActive(void) { return CavLAN.Active; }
+cc_bool CavLAN_IsHost(void) { return CavLAN.Role == CAVLAN_ROLE_HOST && CavLAN.Hosting; }
+cc_bool CavLAN_IsClient(void) { return CavLAN.Role == CAVLAN_ROLE_CLIENT && CavLAN.Connected; }
 
 #define LAN_MAX_CLIENTS 4
 #define LAN_BUFFER_SIZE 8192
@@ -330,6 +351,7 @@ static cc_bool SPConnection_Tick(struct ScheduledTask2* task) {
 
 static void SPConnection_Init(void) {
 	Server_ResetState();
+	if (!lan_hosting) CavLAN_Reset();
 	Physics_Init();
 
 	Server.BeginConnect = SPConnection_BeginConnect;
@@ -1183,6 +1205,12 @@ cc_bool Server_StartLAN(int port) {
 	}
 	Socket_SetNonBlocking(lan_listen, true);
 	lan_hosting = true;
+	CavLAN.Active     = true;
+	CavLAN.Hosting    = true;
+	CavLAN.Connected  = true;
+	CavLAN.IsLoopback = false;
+	CavLAN.Role       = CAVLAN_ROLE_HOST;
+	CavLAN_SetAddress(NULL, port);
 	cavlan_lastName[0] = '\0';
 	cavlan_lastSkin[0] = '\0';
 	return true;
@@ -1198,9 +1226,10 @@ void Server_StopLAN(void) {
 	if (lan_hosting) Socket_Close(lan_listen);
 	lan_hosting = false;
 	lan_listen  = -1;
+	if (CavLAN.Role == CAVLAN_ROLE_HOST) CavLAN_Reset();
 }
 
-cc_bool Server_IsLANHosted(void) { return lan_hosting; }
+cc_bool Server_IsLANHosted(void) { return CavLAN_IsHost(); }
 
 static cc_bool Server_IsLoopbackAddress(const cc_string* address) {
 	return String_CaselessEqualsConst(address, "localhost")
@@ -1392,6 +1421,8 @@ static void MPConnection_Disconnect(void) {
 
 void Server_LeaveLAN(void) {
 	MPConnection_Disconnect();
+	CavLAN_Reset();
+	cavlan_isClient = false;
 }
 
 static void DisconnectReadFailed(cc_result res) {
@@ -1522,6 +1553,7 @@ static void MPConnection_Init(void) {
 	Server.SendData     = MPConnection_SendData;
 	net_readCurrent     = net_readBuffer;
 	cavlan_isClient     = false;
+	CavLAN_Reset();
 }
 
 static void CavLanClient_FailConnect(cc_result result) {
@@ -1535,6 +1567,11 @@ static void CavLanClient_FinishConnect(void) {
 	cc_uint8 hello[2 + STRING_SIZE * 2];
 	cc_string skin; char skinBuffer[STRING_SIZE];
 	int length;
+
+	CavLAN.Active    = true;
+	CavLAN.Connected = true;
+	CavLAN.Hosting   = false;
+	CavLAN.Role      = CAVLAN_ROLE_CLIENT;
 
 	net_connecting = false;
 	timeSinceLast  = 0.0f;
@@ -1900,6 +1937,8 @@ static void CavLanClient_Init(void) {
 	Server.SendData     = MPConnection_SendData;
 	net_readCurrent     = net_readBuffer;
 	cavlan_isClient     = true;
+	CavLAN.Active       = true;
+	CavLAN.Role         = CAVLAN_ROLE_CLIENT;
 }
 #else
 static void MPConnection_Init(void) { SPConnection_Init(); }
@@ -1927,6 +1966,8 @@ static void OnInit(void) {
 	String_InitArray(Server.Name,    nameBuffer);
 	String_InitArray(Server.MOTD,    motdBuffer);
 	String_InitArray(Server.AppName, appBuffer);
+	String_InitArray(CavLAN.Address, CavLAN.AddressBuffer);
+	CavLAN_Reset();
 
 	if (!Server.Address.length) {
 		SPConnection_Init();
@@ -1958,6 +1999,7 @@ static void Server_ConnectCommon(const cc_string* address, int port) {
 
 void Server_ConnectToClassic(const cc_string* address, int port) {
 	Server_ConnectCommon(address, port);
+	CavLAN_Reset();
 
 	MPConnection_Init();
 	Protocol_Reset();
@@ -1974,6 +2016,12 @@ void Server_ConnectToCavLAN(const cc_string* address, int port) {
 	}
 
 	Server_ConnectCommon(address, port);
+	CavLAN.Active     = true;
+	CavLAN.Hosting    = false;
+	CavLAN.Connected  = false;
+	CavLAN.IsLoopback = Server_IsLoopbackAddress(address);
+	CavLAN.Role       = CAVLAN_ROLE_CLIENT;
+	CavLAN_SetAddress(address, port);
 
 	CavLanClient_Init();
 	Game_Tasks.network.callback = Server.Tick;
@@ -1999,9 +2047,9 @@ static void OnFree(void) {
 }
 
 static void OnClose(void) {
+	cc_bool wasLanClient = CavLAN.Role == CAVLAN_ROLE_CLIENT || cavlan_isClient;
 	Server.Address.length = 0;
 	Server.Port = 0;
-	lan_hosting = false;
 
 	if (Server.IsSinglePlayer) {
 		Server_StopLAN();
@@ -2009,12 +2057,15 @@ static void OnClose(void) {
 	}
 	else {
 		Ping_Reset();
-		if (Server.Disconnected) return;
-
-		Mem_Free(cavlan_blocks); cavlan_blocks = NULL;
-		Socket_Close(net_socket);
-		Server.Disconnected = true;
+		if (!Server.Disconnected) {
+			Mem_Free(cavlan_blocks); cavlan_blocks = NULL;
+			Socket_Close(net_socket);
+			Server.Disconnected = true;
+		}
 	}
+
+	cavlan_isClient = false;
+	if (wasLanClient || CavLAN.Role == CAVLAN_ROLE_HOST) CavLAN_Reset();
 }
 
 struct IGameComponent Server_Component = {
