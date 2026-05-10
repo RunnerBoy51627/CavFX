@@ -21,14 +21,14 @@
 #include "Stream.h"
 
 struct _GuiData Gui;
+GfxResourceID Gui_CavFXLogoTex;
+int Gui_CavFXLogoWidth, Gui_CavFXLogoHeight;
 struct Screen* Gui_Screens[GUI_MAX_SCREENS];
 static cc_uint8 priorities[GUI_MAX_SCREENS];
 #ifdef CC_BUILD_DUALSCREEN
 static struct Texture touchBgTex;
 #endif
 static GfxResourceID bars_VB;
-GfxResourceID Gui_CavFXLogoTex;
-int Gui_CavFXLogoWidth, Gui_CavFXLogoHeight;
 
 /*########################################################################################################################*
 *----------------------------------------------------------Gui------------------------------------------------------------*
@@ -734,7 +734,6 @@ static void CavFXLogoPngProcess(struct Stream* stream, const cc_string* name) {
 	Mem_Free(bmp.scan0);
 }
 static struct TextureEntry cavfx_logo_entry = { "cavfx_logo.png", CavFXLogoPngProcess };
-
 
 static void OnFontChanged(void* obj) { Gui_RefreshAll(); }
 

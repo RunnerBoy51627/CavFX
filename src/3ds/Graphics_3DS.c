@@ -1061,3 +1061,9 @@ void Gfx_Draw2DTexture(const struct Texture* tex, PackedCol color) {
 	C3D_ImmDrawEnd();
 }
 
+
+
+void Gfx_Draw2DTextureRotated(const struct Texture* tex, PackedCol color, float angle) {
+	/* 3DS fallback: draw unrotated instead of failing to link. */
+	Gfx_Draw2DTexture(tex, color);
+}

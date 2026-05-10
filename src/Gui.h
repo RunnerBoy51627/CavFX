@@ -85,6 +85,8 @@ float Gui_GetCrosshairScale(void);
 
 CC_NOINLINE void Gui_MakeTitleFont(struct FontDesc* font);
 CC_NOINLINE void Gui_MakeBodyFont(struct FontDesc* font);
+extern GfxResourceID Gui_CavFXLogoTex;
+extern int Gui_CavFXLogoWidth, Gui_CavFXLogoHeight;
 
 /* Functions for a Screen instance. */
 struct ScreenVTABLE {
@@ -250,10 +252,6 @@ enum GuiPriority {
 
 #define GUI_MAX_SCREENS 10
 extern struct Screen* Gui_Screens[GUI_MAX_SCREENS];
-
-/* CavFX main menu logo loaded from texture pack/preload root (cavfx_logo.png). */
-extern GfxResourceID Gui_CavFXLogoTex;
-extern int Gui_CavFXLogoWidth, Gui_CavFXLogoHeight;
 
 /* Calculates position of an element on a particular axis */
 /* For example, to calculate X position of a text widget on screen */

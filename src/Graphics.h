@@ -483,6 +483,8 @@ void Gfx_Draw2DFlat(int x, int y, int width, int height, PackedCol color);
 void Gfx_Draw2DGradient(int x, int y, int width, int height, PackedCol top, PackedCol bottom);
 /* Renders a 2D coloured texture */
 void Gfx_Draw2DTexture(const struct Texture* tex, PackedCol color);
+/* Renders a 2D coloured texture rotated around its centre */
+void Gfx_Draw2DTextureRotated(const struct Texture* tex, PackedCol color, float angle);
 /* Fills out the vertices for rendering a 2D coloured texture */
 void Gfx_Make2DQuad(const struct Texture* tex, PackedCol color, struct VertexTextured** vertices);
 

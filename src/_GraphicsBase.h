@@ -215,6 +215,26 @@ void Gfx_Draw2DTexture(const struct Texture* tex, PackedCol color) {
 	Gfx_UnlockDynamicVb(Gfx_texVb);
 	Gfx_DrawVb_IndexedTris_Range(4, 0, DRAW_HINT_SPRITE);
 }
+void Gfx_Draw2DTextureRotated(const struct Texture* tex, PackedCol color, float angle) {
+	struct VertexTextured* v;
+	float cx = tex->x + tex->width  * 0.5f;
+	float cy = tex->y + tex->height * 0.5f;
+	float c = Math_CosF(angle), sn = Math_SinF(angle);
+	float x1 = -tex->width * 0.5f, x2 = tex->width * 0.5f;
+	float y1 = -tex->height * 0.5f, y2 = tex->height * 0.5f;
+
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	v = (struct VertexTextured*)Gfx_LockDynamicVb(Gfx_texVb, VERTEX_FORMAT_TEXTURED, 4);
+
+	v->x = cx + x1 * c - y1 * sn; v->y = cy + x1 * sn + y1 * c; v->z = 0; v->Col = color; v->U = tex->uv.u1; v->V = tex->uv.v1; v++;
+	v->x = cx + x2 * c - y1 * sn; v->y = cy + x2 * sn + y1 * c; v->z = 0; v->Col = color; v->U = tex->uv.u2; v->V = tex->uv.v1; v++;
+	v->x = cx + x2 * c - y2 * sn; v->y = cy + x2 * sn + y2 * c; v->z = 0; v->Col = color; v->U = tex->uv.u2; v->V = tex->uv.v2; v++;
+	v->x = cx + x1 * c - y2 * sn; v->y = cy + x1 * sn + y2 * c; v->z = 0; v->Col = color; v->U = tex->uv.u1; v->V = tex->uv.v2; v++;
+
+	Gfx_UnlockDynamicVb(Gfx_texVb);
+	Gfx_DrawVb_IndexedTris_Range(4, 0, DRAW_HINT_SPRITE);
+}
+
 #endif
 
 struct VertexColoured* Gfx_Build2DFlat(int x, int y, int width, int height, 

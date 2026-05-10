@@ -79,12 +79,12 @@ enum SKIN_TYPE { SKIN_64x32, SKIN_64x64, SKIN_64x64_SLIM, SKIN_INVALID = 0xF0 };
 #define Int32_MinValue  ((cc_int32)-2147483647L - (cc_int32)1L)
 #define Int32_MaxValue  ((cc_int32)2147483647L)
 
-#define SKINS_SERVER    "http://cdn.classicube.net/skin"
+#define SKINS_SERVER "https://cavfx-skin-server.macknmartin.workers.dev"
 #define UPDATES_SERVER  "https://cdn.classicube.net/client"
 #define SERVICES_SERVER "https://www.classicube.net/api"
 #define RESOURCE_SERVER "http://static.classicube.net"
 /* Webpage where users can register for a new account */
-#define REGISTERNEW_URL "https://www.classicube.net/acc/register/"
+#define REGISTERNEW_URL "https://cavfx-55e2c.web.app/register"
 
 #define DEFAULT_USERNAME "SteveFX"
 #endif
