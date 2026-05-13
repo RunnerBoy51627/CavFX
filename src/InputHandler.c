@@ -1274,6 +1274,16 @@ static void OnInputDown(void* obj, int key, cc_bool was, struct InputDevice* dev
 	struct Screen* s;
 	cc_bool triggered;
 	int i;
+
+	if (Game_CrashScreenActive()) {
+		if (!was && (key == CCKEY_ESCAPE || key == CCKEY_ENTER || key == CCKEY_SPACE)) Game_CrashScreenQuit();
+		return;
+	}
+	/* Manual fatal test: routes through the real crash path instead of faking an overlay. */
+	if (!was && key == CCKEY_K && Input.Pressed[CCKEY_F3]) {
+		Logger_DoAbort(1, "Manual fatal exception triggered by F3+K", NULL);
+		return;
+	}
 	if (Input.DownHook && Input.DownHook(key, device)) return;
 
 #ifndef CC_BUILD_WEB

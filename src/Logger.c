@@ -6,6 +6,8 @@
 #include "Stream.h"
 #include "Errors.h"
 #include "Utils.h"
+#include "Game.h"
+#include "Graphics.h"
 
 #if defined CC_BUILD_WEB
 	/* Can't see native CPU state with javascript */
@@ -784,7 +786,15 @@ void Logger_DoAbort(cc_result result, const char* raw_msg, void* ctx) {
 	CloseLogFile();
 
 	msg.buffer[msg.length] = '\0';
-	Window_ShowDialog("We're sorry", msg.buffer);
+
+	if (Window_Main.Exists && Gfx.Created) {
+		Game_CrashScreenShow(raw_msg ? raw_msg : "FATAL ERROR");
+		while (Window_Main.Exists && Game_CrashScreenActive()) {
+			Game_RenderFrame();
+		}
+	} else {
+		Window_ShowDialog("CavFX Error Handler", msg.buffer);
+	}
 	Process_Exit(result);
 }
 

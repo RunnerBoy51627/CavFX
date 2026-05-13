@@ -597,6 +597,12 @@ void Audio_SetSounds(int volume) {
 	else        Sounds_Stop();
 }
 
+void Audio_StopAll(void) {
+	Audio_SetSounds(0);
+	Audio_SetMusic(0);
+	AudioPool_Close();
+}
+
 void Audio_SetMusic(int volume) {
 	Audio_MusicVolume = volume;
 #ifdef CC_BUILD_WEB

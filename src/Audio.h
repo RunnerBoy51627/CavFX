@@ -48,6 +48,7 @@ extern const cc_string Sounds_ZipPathCC;
 
 void Audio_SetMusic(int volume);
 void Audio_SetSounds(int volume);
+void Audio_StopAll(void);
 void Audio_PlayDigSound(cc_uint8 type);
 void Audio_PlayStepSound(cc_uint8 type);
 void Audio_PlayOuchSound(void);

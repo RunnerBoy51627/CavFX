@@ -60,6 +60,171 @@ static float gfx_minFrameMs;
 static cc_bool autoPause;
 static float cavfx_autoSaveTimer;
 
+
+/* CavFX in-game fatal crash handler screen.
+   This deliberately avoids Drawer2D/system fonts so text still renders when fonts break. */
+static cc_bool crashScreenActive;
+static char crashScreenReason[256];
+
+static const cc_uint8 CrashFont_Get(char c, int row) {
+	static const cc_uint8 digits[10][7] = {
+		{14,17,19,21,25,17,14}, {4,12,4,4,4,4,14}, {14,17,1,2,4,8,31}, {30,1,1,14,1,1,30}, {2,6,10,18,31,2,2},
+		{31,16,30,1,1,17,14}, {6,8,16,30,17,17,14}, {31,1,2,4,8,8,8}, {14,17,17,14,17,17,14}, {14,17,17,15,1,2,12}
+	};
+	static const cc_uint8 letters[26][7] = {
+		{14,17,17,31,17,17,17}, {30,17,17,30,17,17,30}, {14,17,16,16,16,17,14}, {30,17,17,17,17,17,30},
+		{31,16,16,30,16,16,31}, {31,16,16,30,16,16,16}, {14,17,16,23,17,17,14}, {17,17,17,31,17,17,17},
+		{14,4,4,4,4,4,14}, {7,2,2,2,18,18,12}, {17,18,20,24,20,18,17}, {16,16,16,16,16,16,31},
+		{17,27,21,21,17,17,17}, {17,25,21,19,17,17,17}, {14,17,17,17,17,17,14}, {30,17,17,30,16,16,16},
+		{14,17,17,17,21,18,13}, {30,17,17,30,20,18,17}, {15,16,16,14,1,1,30}, {31,4,4,4,4,4,4},
+		{17,17,17,17,17,17,14}, {17,17,17,17,17,10,4}, {17,17,17,21,21,21,10}, {17,17,10,4,10,17,17},
+		{17,17,10,4,4,4,4}, {31,1,2,4,8,16,31}
+	};
+	if (c >= '0' && c <= '9') return digits[c - '0'][row];
+	if (c >= 'a' && c <= 'z') c -= 32;
+	if (c >= 'A' && c <= 'Z') return letters[c - 'A'][row];
+	switch (c) {
+	case ':': return row == 2 || row == 4 ? 4 : 0;
+	case '.': return row == 6 ? 4 : 0;
+	case '-': return row == 3 ? 31 : 0;
+	case '/': return row == 0 ? 1 : row == 1 ? 2 : row == 2 ? 2 : row == 3 ? 4 : row == 4 ? 8 : row == 5 ? 8 : 16;
+	case '(': return row == 0 ? 2 : row == 1 ? 4 : row == 2 ? 8 : row == 3 ? 8 : row == 4 ? 8 : row == 5 ? 4 : 2;
+	case ')': return row == 0 ? 8 : row == 1 ? 4 : row == 2 ? 2 : row == 3 ? 2 : row == 4 ? 2 : row == 5 ? 4 : 8;
+	case '+': return row == 1 || row == 5 ? 4 : row == 2 || row == 3 || row == 4 ? 31 : 0;
+	default:  return 0;
+	}
+}
+
+static void CrashFont_DrawChar(int x, int y, int scale, char c, PackedCol col) {
+	int row, bit; cc_uint8 mask;
+	for (row = 0; row < 7; row++) {
+		mask = CrashFont_Get(c, row);
+		for (bit = 0; bit < 5; bit++) {
+			if (!(mask & (1 << (4 - bit)))) continue;
+			Gfx_Draw2DFlat(x + bit * scale, y + row * scale, scale, scale, col);
+		}
+	}
+}
+
+static void CrashFont_DrawText(int x, int y, int scale, const char* text, PackedCol col) {
+	for (; *text; text++) {
+		if (*text != ' ') CrashFont_DrawChar(x, y, scale, *text, col);
+		x += 6 * scale;
+	}
+}
+
+static void CrashFont_DrawTextN(int x, int y, int scale, const char* text, int maxChars, PackedCol col) {
+	int i; char c;
+	for (i = 0; text[i] && i < maxChars; i++) {
+		c = text[i];
+		if (c >= 'a' && c <= 'z') c -= 32;
+		if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == ' ' || c == ':' || c == '.' || c == '-' || c == '/' || c == '(' || c == ')' || c == '+')) c = ' ';
+		if (c != ' ') CrashFont_DrawChar(x, y, scale, c, col);
+		x += 6 * scale;
+	}
+}
+
+
+static cc_uint32 CrashScreen_HashReason(const char* text) {
+	cc_uint32 hash = 2166136261u;
+	if (!text) return 0xC0DE0000u;
+	for (; *text; text++) {
+		hash ^= (cc_uint8)*text;
+		hash *= 16777619u;
+	}
+	return hash ? hash : 0xC0DE0000u;
+}
+
+static void CrashScreen_ToHex8(char* dst, cc_uint32 value) {
+	static const char hex[] = "0123456789ABCDEF";
+	int i;
+	for (i = 0; i < 8; i++) dst[i] = hex[(value >> ((7 - i) * 4)) & 0x0F];
+	dst[8] = '\0';
+}
+
+static cc_bool CrashScreen_Contains(const char* text, const char* token) {
+	int i, j;
+	if (!text || !token) return false;
+	for (i = 0; text[i]; i++) {
+		for (j = 0; token[j]; j++) {
+			char a = text[i + j], b = token[j];
+			if (a >= 'a' && a <= 'z') a -= 32;
+			if (b >= 'a' && b <= 'z') b -= 32;
+			if (a != b) break;
+		}
+		if (!token[j]) return true;
+	}
+	return false;
+}
+
+static const char* CrashScreen_Cause(void) {
+	if (CrashScreen_Contains(crashScreenReason, "ACCESS_VIOLATION")) return "CAUSE: ACCESS VIOLATION";
+	if (CrashScreen_Contains(crashScreenReason, "STACK_OVERFLOW"))     return "CAUSE: STACK OVERFLOW";
+	if (CrashScreen_Contains(crashScreenReason, "ILLEGAL") || CrashScreen_Contains(crashScreenReason, "INSTRUCTION")) return "CAUSE: ILLEGAL INSTRUCTION";
+	if (CrashScreen_Contains(crashScreenReason, "DIVIDE") || CrashScreen_Contains(crashScreenReason, "ZERO")) return "CAUSE: DIVIDE BY ZERO";
+	if (CrashScreen_Contains(crashScreenReason, "ASSERT") || CrashScreen_Contains(crashScreenReason, "MANUAL")) return "CAUSE: MANUAL ABORT";
+	return "CAUSE: SOFTWARE EXCEPTION";
+}
+
+static void CrashScreen_DrawRegister(int x, int y, int scale, const char* name, cc_uint32 value, PackedCol col) {
+	char line[16];
+	line[0] = name[0]; line[1] = name[1]; line[2] = ':'; line[3] = ' ';
+	CrashScreen_ToHex8(line + 4, value);
+	CrashFont_DrawText(x, y, scale, line, col);
+}
+
+void Game_CrashScreenShow(const char* reason) {
+	crashScreenActive = true;
+	int i;
+	if (!reason) { crashScreenReason[0] = '\0'; }
+	else {
+		for (i = 0; reason[i] && i < (int)sizeof(crashScreenReason) - 1; i++) crashScreenReason[i] = reason[i];
+		crashScreenReason[i] = '\0';
+	}
+	Audio_StopAll();
+}
+
+cc_bool Game_CrashScreenActive(void) { return crashScreenActive; }
+
+void Game_CrashScreenQuit(void) {
+	crashScreenActive = false;
+	Window_RequestClose();
+}
+
+static void Game_RenderCrashScreen(void) {
+	int scale = Game.Width < 640 ? 2 : 3;
+	int x = Display_ScaleX(32), y = Display_ScaleY(32);
+	PackedCol white = PackedCol_Make(235, 235, 235, 255);
+	PackedCol red   = PackedCol_Make(255,  80,  80, 255);
+	PackedCol grey  = PackedCol_Make(160, 160, 160, 255);
+
+	Gfx_ClearBuffers(GFX_BUFFER_COLOR | GFX_BUFFER_DEPTH);
+	Gfx_Begin2D(Game.Width, Game.Height);
+	Gfx_Draw2DFlat(0, 0, Game.Width, Game.Height, PackedCol_Make(0, 0, 0, 255));
+
+	CrashFont_DrawText(x, y, scale, "CAVFX OS EXCEPTION", red); y += 12 * scale;
+	CrashFont_DrawText(x, y, scale, "A FATAL ERROR HAS OCCURRED", white); y += 12 * scale;
+	{
+		cc_uint32 code = CrashScreen_HashReason(crashScreenReason);
+		CrashFont_DrawText(x, y, scale, "THREAD: MAIN", white); y += 10 * scale;
+		CrashFont_DrawText(x, y, scale, "STATUS: STOPPED", white); y += 10 * scale;
+		CrashFont_DrawText(x, y, scale, CrashScreen_Cause(), white); y += 10 * scale;
+		CrashScreen_DrawRegister(x, y, scale, "EC", 0xC0000000u ^ code, white); y += 10 * scale;
+		CrashScreen_DrawRegister(x, y, scale, "PC", 0x00400000u + (code & 0x000FFFFFu), white); y += 10 * scale;
+		CrashScreen_DrawRegister(x, y, scale, "RA", 0x80000000u | ((code >> 1) & 0x00FFFFFFu), white); y += 12 * scale;
+	}
+	CrashFont_DrawText(x, y, scale, "DETAILS:", grey); y += 10 * scale;
+	if (crashScreenReason[0]) {
+		CrashFont_DrawTextN(x, y, scale, crashScreenReason, 44, grey); y += 10 * scale;
+		if (crashScreenReason[44]) { CrashFont_DrawTextN(x, y, scale, crashScreenReason + 44, 44, grey); y += 10 * scale; }
+	}
+	y += 6 * scale;
+	CrashFont_DrawText(x, y, scale, "LOG SAVED TO CLIENT.LOG", grey); y += 10 * scale;
+	CrashFont_DrawText(x, y, scale, "PRESS ESC ENTER OR SPACE", grey); y += 10 * scale;
+	CrashFont_DrawText(x, y, scale, "TO POWER OFF", grey);
+	Gfx_End2D();
+}
+
 cc_bool Game_ClassicMode, Game_ClassicHacks;
 cc_bool Game_AllowCustomBlocks;
 cc_bool Game_AllowServerTextures;
@@ -802,6 +967,12 @@ void Game_RenderFrame(void) {
 
 	Gfx_BeginFrame();
 	Gfx_BindIb(Gfx.DefaultIb);
+	if (crashScreenActive) {
+		Game_RenderCrashScreen();
+		Gfx_EndFrame();
+		LimitFPS();
+		return;
+	}
 	Game.Time += deltaD;
 	Game_Vertices = 0;
 	Gamepad_Tick(delta);

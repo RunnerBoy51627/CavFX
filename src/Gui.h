@@ -85,8 +85,6 @@ float Gui_GetCrosshairScale(void);
 
 CC_NOINLINE void Gui_MakeTitleFont(struct FontDesc* font);
 CC_NOINLINE void Gui_MakeBodyFont(struct FontDesc* font);
-extern GfxResourceID Gui_CavFXLogoTex;
-extern int Gui_CavFXLogoWidth, Gui_CavFXLogoHeight;
 
 /* Functions for a Screen instance. */
 struct ScreenVTABLE {

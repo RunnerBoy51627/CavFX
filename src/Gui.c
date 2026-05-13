@@ -21,8 +21,6 @@
 #include "Stream.h"
 
 struct _GuiData Gui;
-GfxResourceID Gui_CavFXLogoTex;
-int Gui_CavFXLogoWidth, Gui_CavFXLogoHeight;
 struct Screen* Gui_Screens[GUI_MAX_SCREENS];
 static cc_uint8 priorities[GUI_MAX_SCREENS];
 #ifdef CC_BUILD_DUALSCREEN
@@ -721,20 +719,6 @@ static void TouchPngProcess(struct Stream* stream, const cc_string* name) {
 }
 static struct TextureEntry touch_entry = { "touch.png", TouchPngProcess };
 
-static void CavFXLogoPngProcess(struct Stream* stream, const cc_string* name) {
-	struct Bitmap bmp;
-	cc_result res = Png_Decode(&bmp, stream);
-
-	if (res) { Logger_SysWarn2(res, "decoding", name); return; }
-	if (Game_ValidateBitmap(name, &bmp)) {
-		Gui_CavFXLogoWidth  = bmp.width;
-		Gui_CavFXLogoHeight = bmp.height;
-		Gfx_RecreateTexture(&Gui_CavFXLogoTex, &bmp, TEXTURE_FLAG_MANAGED, false);
-	}
-	Mem_Free(bmp.scan0);
-}
-static struct TextureEntry cavfx_logo_entry = { "cavfx_logo.png", CavFXLogoPngProcess };
-
 static void OnFontChanged(void* obj) { Gui_RefreshAll(); }
 
 static void OnKeyPress(void* obj, int cp) {
@@ -771,7 +755,6 @@ static void OnContextLost(void* obj) {
 	Gfx_DeleteTexture(&Gui.IconsTex);
 	Gfx_DeleteTexture(&Gui.TouchTex);
 	Gfx_DeleteTexture(&Gui.ItemsTex);
-	Gfx_DeleteTexture(&Gui_CavFXLogoTex);
 }
 
 static void OnInit(void) {
@@ -781,7 +764,6 @@ static void OnInit(void) {
 	TextureEntry_Register(&icons_entry);
 	TextureEntry_Register(&items_entry);
 	TextureEntry_Register(&touch_entry);
-	TextureEntry_Register(&cavfx_logo_entry);
 	LoadLooseItemsPng();
 
 	Event_Register_(&InputEvents.Wheel,   NULL, OnMouseWheel);

@@ -103,6 +103,11 @@ void Game_UserSetViewDistance(int distance);
 void Game_Disconnect(const cc_string* title, const cc_string* reason);
 void Game_Reset(void);
 
+/* Shows CavFX fatal crash screen inside the game window. */
+void Game_CrashScreenShow(const char* reason);
+cc_bool Game_CrashScreenActive(void);
+void Game_CrashScreenQuit(void);
+
 /* Sets the block in the map at the given coordinates, then updates state associated with the block. */
 /* (updating state means recalculating light, redrawing chunk block is in, etc) */
 /* NOTE: This does NOT notify the server, use Game_ChangeBlock for that. */

@@ -53,6 +53,12 @@ void Logger_Log(const cc_string* msg);
 
 void Logger_Hook(void);
 void Logger_DoAbort(cc_result result, const char* raw_msg, void* ctx);
+
+/* CavFX in-game crash screen (SM64 Europe/Shindou/iQue inspired) */
+extern cc_bool Logger_CrashScreenActive;
+void Logger_ShowCrashScreen(const char* raw_msg, cc_result result);
+void Logger_DrawCrashScreen(float delta);
+
 void Logger_FailToStart(const char* raw_msg);
 
 CC_END_HEADER

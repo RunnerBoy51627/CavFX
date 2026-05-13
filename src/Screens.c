@@ -1876,6 +1876,8 @@ static struct InventoryScreen {
 	struct TableWidget table;
 	struct TextWidget title;
 	int craftX, craftY, craftSlot, craftOutX, craftOutY;
+	int craftGridSize, craftGridWidth;
+	cc_bool fullCraftingTable;
 	int craftState[(INVENTORY_CRAFTING_GRID + 2) * ISOMETRICDRAWER_MAXVERTICES / 4];
 	int craftVerticesCount;
 	int lastCraftSlot;
@@ -1891,6 +1893,12 @@ static void InventoryScreen_GetTitleText(cc_string* desc, BlockID block, int cou
 	cc_string name;
 	int block_ = block;
 	if (Game_PureClassic) { String_AppendConst(desc, "Select block"); return; }
+	if (!Game_SurvivalMode && block == BLOCK_AIR) {
+		String_AppendConst(desc, "Build inventory: ");
+		String_AppendConst(desc, Inventory_CreativePageName());
+		String_AppendConst(desc, " page  &7(TAB/PageUp/PageDown)&f");
+		return;
+	}
 	if (block == BLOCK_AIR) return;
 
 	if (SurvivalItem_IsItem(block)) {
@@ -1927,6 +1935,15 @@ static void InventoryScreen_OnUpdateTitle(BlockID block, int count) {
 }
 
 
+static int InventoryScreen_GridSize(struct InventoryScreen* s) {
+	return s->fullCraftingTable ? 9 : 4;
+}
+
+static int InventoryScreen_GridWidth(struct InventoryScreen* s) {
+	return s->fullCraftingTable ? 3 : 2;
+}
+
+
 static void InventoryScreen_OnBlockChanged(void* screen) {
 	struct InventoryScreen* s = (struct InventoryScreen*)screen;
 	TableWidget_OnInventoryChanged(&s->table);
@@ -1953,22 +1970,71 @@ static void InventoryScreen_ContextRecreated(void* screen) {
 	TableWidget_RecreateTitle(&s->table, true);
 }
 
+
+static void InventoryScreen_DrawSurvivalItem(BlockID item, int x, int y, int size) {
+	struct Texture tex;
+	TextureLoc loc;
+	int col, row;
+
+	if (!Gui.ItemsTex || !SurvivalItem_IsItem(item)) return;
+
+	loc = SurvivalItem_TextureLoc(item);
+	col = ((int)loc) & 15;
+	row = ((int)loc) >> 4;
+
+	tex.ID     = Gui.ItemsTex;
+	tex.x      = (short)(x - size / 2);
+	tex.y      = (short)(y - size / 2);
+	tex.width  = (cc_uint16)size;
+	tex.height = (cc_uint16)size;
+	tex.uv.u1  = col / 16.0f;
+	tex.uv.v1  = row / 16.0f;
+	tex.uv.u2  = (col + 1) / 16.0f;
+	tex.uv.v2  = (row + 1) / 16.0f;
+
+	Texture_Render(&tex);
+}
+
+static void InventoryScreen_RenderSurvivalCraftItems(struct InventoryScreen* s) {
+	int i, x, y, size;
+
+	size = (int)(s->craftSlot * 0.78f);
+
+	for (i = 0; i < s->craftGridSize; i++) {
+		if (!SurvivalItem_IsItem(Inventory.Craft[i]) || !Inventory.CraftCounts[i]) continue;
+		x = s->craftX + (i % s->craftGridWidth) * s->craftSlot + s->craftSlot / 2;
+		y = s->craftY + (i / s->craftGridWidth) * s->craftSlot + s->craftSlot / 2;
+		InventoryScreen_DrawSurvivalItem(Inventory.Craft[i], x, y, size);
+	}
+
+	if (SurvivalItem_IsItem(Inventory.CraftResult) && Inventory.CraftResultCount) {
+		x = s->craftOutX + s->craftSlot / 2;
+		y = s->craftOutY + s->craftSlot / 2;
+		InventoryScreen_DrawSurvivalItem(Inventory.CraftResult, x, y, size);
+	}
+
+	if (SurvivalItem_IsItem(s->heldBlock) && s->heldCount) {
+		InventoryScreen_DrawSurvivalItem(s->heldBlock, Pointers[0].x, Pointers[0].y, size);
+	}
+}
+
 static void InventoryScreen_BuildCraftMesh(struct InventoryScreen* s, struct VertexTextured** ptr) {
 	int i, x, y;
 	IsometricDrawer_BeginBatch(*ptr, s->craftState);
 
-	for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
+	for (i = 0; i < s->craftGridSize; i++) {
 		if (Inventory.Craft[i] == BLOCK_AIR || !Inventory.CraftCounts[i]) continue;
-		x = s->craftX + (i & 1) * s->craftSlot + s->craftSlot / 2;
-		y = s->craftY + (i >> 1) * s->craftSlot + s->craftSlot / 2;
+		if (SurvivalItem_IsItem(Inventory.Craft[i])) continue;
+		x = s->craftX + (i % s->craftGridWidth) * s->craftSlot + s->craftSlot / 2;
+		y = s->craftY + (i / s->craftGridWidth) * s->craftSlot + s->craftSlot / 2;
 		IsometricDrawer_AddBatch(Inventory.Craft[i], s->craftSlot * 0.30f, x, y);
 	}
-	if (Inventory.CraftResult != BLOCK_AIR && Inventory.CraftResultCount) {
+	if (Inventory.CraftResult != BLOCK_AIR && Inventory.CraftResultCount && !SurvivalItem_IsItem(Inventory.CraftResult)) {
 		x = s->craftOutX + s->craftSlot / 2;
 		y = s->craftOutY + s->craftSlot / 2;
 		IsometricDrawer_AddBatch(Inventory.CraftResult, s->craftSlot * 0.30f, x, y);
 	}
-	if (s->heldBlock != BLOCK_AIR && s->heldCount) {
+	if (s->heldBlock != BLOCK_AIR && s->heldCount && !SurvivalItem_IsItem(s->heldBlock)) {
 		IsometricDrawer_AddBatch(s->heldBlock, s->craftSlot * 0.30f, Pointers[0].x, Pointers[0].y);
 	}
 
@@ -2036,6 +2102,8 @@ static void InventoryScreen_Init(void* screen) {
 	/*  status might be toggled *after* InventoryScreen_Init() is called */
 	/* That causes the cursor to be moved back to the middle of the window */
 	s->deferredSelect = true;
+	s->craftGridSize = InventoryScreen_GridSize(s);
+	s->craftGridWidth = InventoryScreen_GridWidth(s);
 	s->lastCraftSlot  = -1;
 	s->lastCraftClick = 0.0;
 	s->heldBlock      = BLOCK_AIR;
@@ -2089,10 +2157,14 @@ static void InventoryScreen_Render(void* screen, float delta) {
 	Widget_Render2(&s->title,              0);
 
 	if (!Game_SurvivalMode) return;
-	Gfx_Draw2DFlat(s->craftX,        s->craftY,        slot, slot, PackedCol_Make(34, 34, 34, 168));
-	Gfx_Draw2DFlat(s->craftX + slot, s->craftY,        slot, slot, PackedCol_Make(34, 34, 34, 168));
-	Gfx_Draw2DFlat(s->craftX,        s->craftY + slot, slot, slot, PackedCol_Make(34, 34, 34, 168));
-	Gfx_Draw2DFlat(s->craftX + slot, s->craftY + slot, slot, slot, PackedCol_Make(34, 34, 34, 168));
+	{
+		int i, sx, sy;
+		for (i = 0; i < s->craftGridSize; i++) {
+			sx = s->craftX + (i % s->craftGridWidth) * slot;
+			sy = s->craftY + (i / s->craftGridWidth) * slot;
+			Gfx_Draw2DFlat(sx, sy, slot, slot, PackedCol_Make(34, 34, 34, 168));
+		}
+	}
 	Gfx_Draw2DFlat(s->craftOutX,     s->craftOutY,     slot, slot, PackedCol_Make(57, 57, 104, 202));
 
 	if (s->craftVerticesCount) {
@@ -2100,6 +2172,7 @@ static void InventoryScreen_Render(void* screen, float delta) {
 		Gfx_BindDynamicVb(s->vb);
 		IsometricDrawer_Render(s->craftVerticesCount, TEXTWIDGET_MAX + TABLE_MAX_VERTICES, s->craftState);
 	}
+	InventoryScreen_RenderSurvivalCraftItems(s);
 }
 
 static void InventoryScreen_Layout(void* screen) {
@@ -2115,19 +2188,40 @@ static void InventoryScreen_Layout(void* screen) {
 	Widget_Layout(&s->title); /* Needed for yOffset */
 
 	if (Game_SurvivalMode) {
+		s->craftGridSize  = InventoryScreen_GridSize(s);
+		s->craftGridWidth = InventoryScreen_GridWidth(s);
 		s->craftSlot = Display_ScaleX(42 * Math_SqrtF(s->table.scale));
 		s->craftX    = s->table.x + s->table.width + Display_ScaleX(32);
 		s->craftY    = s->table.y;
-		s->craftOutX = s->craftX + s->craftSlot * 3;
-		s->craftOutY = s->craftY + s->craftSlot / 2;
+		s->craftOutX = s->craftX + s->craftSlot * (s->craftGridWidth + 1);
+		s->craftOutY = s->craftY + (s->craftGridWidth == 3 ? s->craftSlot : s->craftSlot / 2);
 	}
 }
 
 static cc_bool InventoryScreen_HandleSurvivalClick(struct InventoryScreen* s, int x, int y, cc_bool right);
 
+static cc_bool InventoryScreen_ChangeCreativePage(struct InventoryScreen* s, int key) {
+	if (Game_SurvivalMode) return false;
+	if (key == CCKEY_TAB || key == CCKEY_PAGEDOWN) {
+		Inventory_NextCreativePage();
+	} else if (key == CCKEY_PAGEUP) {
+		Inventory_PrevCreativePage();
+	} else {
+		return false;
+	}
+
+	s->table.selectedIndex = -1;
+	s->table.scroll.topRow = 0;
+	TableWidget_RecreateBlocks(&s->table);
+	InventoryScreen_UpdateTitle(s, BLOCK_AIR, 0);
+	s->dirty = true;
+	return true;
+}
+
 static int InventoryScreen_KeyDown(void* screen, int key, struct InputDevice* device) {
 	struct InventoryScreen* s = (struct InventoryScreen*)screen;
 	struct TableWidget* table = &s->table;
+	if (InventoryScreen_ChangeCreativePage(s, key)) return true;
 
 	/* Accuracy: Original classic doesn't close inventory menu when B is pressed */
 	if (InputBind_Claims(BIND_INVENTORY, key, device) && s->releasedInv && !Game_ClassicMode) {
@@ -2165,12 +2259,12 @@ static int InventoryScreen_CraftSlotAt(struct InventoryScreen* s, int x, int y) 
 	int slot = s->craftSlot;
 	int i, sx, sy;
 
-	for (i = 0; i < INVENTORY_CRAFTING_GRID; i++) {
-		sx = s->craftX + (i & 1) * slot;
-		sy = s->craftY + (i >> 1) * slot;
+	for (i = 0; i < s->craftGridSize; i++) {
+		sx = s->craftX + (i % s->craftGridWidth) * slot;
+		sy = s->craftY + (i / s->craftGridWidth) * slot;
 		if (Gui_Contains(sx, sy, slot, slot, x, y)) return i;
 	}
-	if (Gui_Contains(s->craftOutX, s->craftOutY, slot, slot, x, y)) return INVENTORY_CRAFTING_GRID;
+	if (Gui_Contains(s->craftOutX, s->craftOutY, slot, slot, x, y)) return s->craftGridSize;
 	return -1;
 }
 
@@ -2203,7 +2297,7 @@ static void InventoryScreen_ChangedSlots(struct InventoryScreen* s) {
 
 static cc_bool InventoryScreen_MoveCraftToHeld(struct InventoryScreen* s, int slot, int amount) {
 	BlockID block;
-	if (slot < 0 || slot >= INVENTORY_CRAFTING_GRID) return false;
+	if (slot < 0 || slot >= s->craftGridSize) return false;
 	block = Inventory.Craft[slot];
 	if (block == BLOCK_AIR || !Inventory.CraftCounts[slot]) return true;
 	amount = min(amount, Inventory.CraftCounts[slot]);
@@ -2217,7 +2311,7 @@ static cc_bool InventoryScreen_MoveCraftToHeld(struct InventoryScreen* s, int sl
 }
 
 static cc_bool InventoryScreen_PlaceHeldInCraft(struct InventoryScreen* s, int slot, int amount) {
-	if (slot < 0 || slot >= INVENTORY_CRAFTING_GRID) return false;
+	if (slot < 0 || slot >= s->craftGridSize) return false;
 	if (s->heldBlock == BLOCK_AIR || !s->heldCount) return true;
 	if (Inventory.Craft[slot] != BLOCK_AIR && Inventory.Craft[slot] != s->heldBlock) return false;
 	if (Inventory.CraftCounts[slot] >= INVENTORY_MAX_STACK) return false;
@@ -2247,7 +2341,7 @@ static cc_bool InventoryScreen_HandleCraftClick(struct InventoryScreen* s, int x
 	cc_bool doubleClick;
 	if (!Game_SurvivalMode || slot < 0) return false;
 
-	if (slot == INVENTORY_CRAFTING_GRID) {
+	if (slot == s->craftGridSize) {
 		if (InventoryScreen_CanHold(s, Inventory.CraftResult, Inventory.CraftResultCount)) {
 			if (Inventory.CraftResult != BLOCK_AIR && Inventory.CraftResultCount) {
 				InventoryScreen_AddHeld(s, Inventory.CraftResult, Inventory.CraftResultCount);
@@ -2432,6 +2526,27 @@ void InventoryScreen_Show(void) {
 	struct InventoryScreen* s = &InventoryScreen;
 	s->grabsInput = true;
 	s->closable   = true;
+	s->fullCraftingTable = false;
+
+	/* Normal inventory uses 2x2 crafting recipes. */
+	Inventory_SetCraftingGridWidth(2);
+	Inventory_UpdateCrafting();
+
+	s->VTABLE = &InventoryScreen_VTABLE;
+	Gui_Add((struct Screen*)s, GUI_PRIORITY_INVENTORY);
+	CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 1);
+}
+
+void CraftingTableScreen_Show(void) {
+	struct InventoryScreen* s = &InventoryScreen;
+	s->grabsInput = true;
+	s->closable   = true;
+	s->fullCraftingTable = true;
+
+	/* Crafting table uses 3x3 recipes.
+	   Without this, the UI shows 3x3 but the recipe matcher still thinks 2x2. */
+	Inventory_SetCraftingGridWidth(3);
+	Inventory_UpdateCrafting();
 
 	s->VTABLE = &InventoryScreen_VTABLE;
 	Gui_Add((struct Screen*)s, GUI_PRIORITY_INVENTORY);
@@ -2442,13 +2557,6 @@ void InventoryScreen_Hide(void) {
 	struct InventoryScreen* s = &InventoryScreen;
 	Gui_Remove((struct Screen*)s);
 	CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
-}
-
-/* Temporary crafting table screen entry point.
-   InputHandler_UseSelectedBlock calls this when using a crafting table.
-   For now, route to the normal inventory to fix the linker error. */
-void CraftingTableScreen_Show(void) {
-	InventoryScreen_Show();
 }
 
 
